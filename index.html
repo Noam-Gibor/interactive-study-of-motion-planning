@@ -385,6 +385,33 @@ function bsDraw(c,P,{pts=Infinity,upto=1,dim=false}={}){
   plot(c,ca,ACC0.xs,ACC0.ys,COL.green,{w:3.5,alpha:dim?.4:1});
   if(upto>0)plot(c,ca,P.accS.xs,P.accS.ys,COL.purple,{w:5,upto:tm*upto});
   return{ch,ca}}
+// 16c: B-spline PATH. Control polygon = corridor waypoints (midPoly) resampled every h mm; cubic clamped B-spline in u.
+// Curvature is continuous (C2 curve), so the velocity limit curve has no cliffs. Convex hull keeps the curve near its control polygon.
+function resamplePoly(pts,h){const o=[pts[0]];for(let i=0;i<pts.length-1;i++){const a=pts[i],b=pts[i+1],m=Math.max(1,Math.round(Math.hypot(b[0]-a[0],b[1]-a[1])/h));for(let q=1;q<=m;q++)o.push([a[0]+(b[0]-a[0])*q/m,a[1]+(b[1]-a[1])*q/m])}return o}
+function splinePath(ctrl,ds=3){
+  const n=ctrl.length-1,t=[];for(let j=0;j<=n+4;j++)t.push(clamp(j-3,0,n-2));
+  const ev=u=>{let k=3;while(k<n&&u>=t[k+1])k++;const d=[ctrl[k-3],ctrl[k-2],ctrl[k-1],ctrl[k]].map(p=>p.slice());
+    for(let r=1;r<=3;r++)for(let j=3;j>=r;j--){const i=k-3+j,den=t[i+4-r]-t[i],al=den>0?(u-t[i])/den:0;d[j]=[(1-al)*d[j-1][0]+al*d[j][0],(1-al)*d[j-1][1]+al*d[j][1]]}return d[3]};
+  const M=(n-2)*400,fine=[];for(let q=0;q<=M;q++)fine.push(ev((n-2)*q/M));
+  // resample by arc length
+  const P=[fine[0]];let acc=0;for(let q=1;q<fine.length;q++){const a=fine[q-1],b=fine[q],L=Math.hypot(b[0]-a[0],b[1]-a[1]);let used=0;
+    while(acc+L-used>=ds){const f=(used+ds-acc)/L;P.push([a[0]+(b[0]-a[0])*f,a[1]+(b[1]-a[1])*f]);used+=ds-acc;acc=0}acc+=L-used}
+  P.push(fine[fine.length-1]);
+  const S={x:P.map(p=>p[0]),y:P.map(p=>p[1]),h:[],k:[],seg:P.map(()=>0),segs:[{kind:'straight',color:COL.lime}],spin:{}};const N=P.length;
+  let hc=Math.atan2(P[1][1]-P[0][1],P[1][0]-P[0][0]);
+  for(let i=0;i<N;i++){const a=P[Math.max(0,i-1)],b=P[Math.min(N-1,i+1)],h=Math.atan2(b[1]-a[1],b[0]-a[0]);hc+=Math.atan2(Math.sin(h-hc),Math.cos(h-hc));S.h.push(hc)}
+  for(let i=0;i<N;i++){const a=Math.max(0,i-4),b=Math.min(N-1,i+4);S.k.push(b>a?(S.h[b]-S.h[a])/((b-a)*ds):0)}
+  S.ctrl=ctrl;return finish(S)}
+// closest approach of the path centre line to any wall or post (mm), wall half-thickness 6, post half-size 8
+function wallGap(S,walls,W,H){let m=Infinity;const segs=[...walls].map(w=>{const[a,b]=w.slice(1).split(',').map(Number);return w[0]==='h'?[a*CELL,b*CELL,(a+1)*CELL,b*CELL]:[a*CELL,b*CELL,a*CELL,(b+1)*CELL]});
+  for(let i=0;i<S.x.length;i+=3){const x=S.x[i],y=S.y[i];
+    for(const[x0,y0,x1,y1]of segs){const dx=x1-x0,dy=y1-y0,f=clamp(((x-x0)*dx+(y-y0)*dy)/(dx*dx+dy*dy)),d=Math.hypot(x-x0-f*dx,y-y0-f*dy)-6;if(d<m)m=d}
+    for(let a=0;a<=W;a++)for(let b=0;b<=H;b++){const d=Math.hypot(x-a*CELL,y-b*CELL)-8;if(d<m)m=d}}
+  return m}
+const SP={S:splinePath(resamplePoly(midPoly(RACE),150))};SP.P=topp(SP.S,1.5,4);SP.gap=wallGap(SP.S,RACE_W,6,6);SP.gap0=wallGap(STRATS[2].S,RACE_W,6,6);
+{const phOf=P=>{const S=P.S,n=S.x.length,st=Math.max(1,Math.floor(n/700)),o={xs:[],vl:[],v:[],k:[]};for(let i=0;i<n;i+=st){o.xs.push(S.s[i]/1000);o.vl.push(Math.min(P.vl[i],4600)/1000);o.v.push(P.v[i]/1000);o.k.push(Math.abs(S.k[i])*1000)}return o};
+  SP.ph=phOf(SP.P);SP.ph0=phOf(STRATS[2].P);SP.km=Math.ceil(Math.max(...SP.ph0.k,...SP.ph.k)*1.15);
+  SP.cliffs=SP.ph0.xs.map((x,i)=>i).filter(i=>i&&SP.ph0.xs[i]>.02&&Math.abs(SP.ph0.vl[i]-SP.ph0.vl[i-1])>.5)}
 const A_MS=1.5*G/1000; // grip in m/s^2, same 1.5 g as the planner
 // chart with a signed y axis (for accelerations)
 function schart(c,bx,{xmax,ymax,xlab,ylab}){const{x:L,y:T,w:W,h:H}=bx,sx=v=>L+v/xmax*W,sy=v=>T+H/2-v/ymax*H/2;
@@ -707,6 +734,38 @@ const SCENES=[
     txt(c,`${P.T.toFixed(2)} s`,90,730,{mono:true,size:76,color:COL.purple});
     txt(c,`+${((P.T/P0.T-1)*100).toFixed(1)}% time`,94,790,{mono:true,size:32});
     txt(c,`jerk ≤ ${Math.round(P.jerk)} m/s³`,94,840,{mono:true,size:32})}},
+
+{ title:'Smooth the path, too', caption:'Continuous curvature: the cliffs become slopes.', builds:3,
+  notes:'So far we smoothed the SPEED along a fixed path. Now smooth the PATH. Our compiled path is straight lines plus circular arcs, so curvature jumps from zero to 1/r at every arc entry. Every jump is a cliff in the velocity limit curve, a discontinuity point in Shiller and Lu\'s terms, and the sideways acceleration switches on instantly there (the corner lab showed the clothoid fix). A B-spline path removes the jumps by construction. First click: control points and the new path. Second click: both speed plans and the race.</p><p><b>Construction</b></p><ol>'+
+    '<li><b>Control polygon.</b> Take the corridor centreline through the cell-edge midpoints (the same polyline that gave us the diagonals) and put a control point every 150 mm: 16 points.</li>'+
+    '<li><b>Curve.</b> A clamped cubic B-spline through that polygon: it starts and ends exactly at the start and goal cells.</li>'+
+    '<li><b>Continuous curvature.</b> A cubic B-spline is C², so heading and curvature κ(s) are continuous. Then Ṡmax(s) = √(a/κ) is continuous too: slopes instead of cliffs, and the sideways acceleration ramps in like a clothoid.</li>'+
+    '<li><b>Convex hull again.</b> Each piece of the curve lies inside the hull of 4 neighbouring control points. They sit on the corridor centreline, so the curve stays inside the corridor. Collision checking reduces to checking control points (Lecture 2 C-space: shrink the mouse to a point, grow the walls by half its width).</li></ol>'+
+    '<p><b>Result</b> (same planner, 1.5 g, 4 m/s): arcs and lines 1.24 s with the centreline 39 mm from the nearest wall or post; B-spline 1.22 s with 49 mm, tightest radius about 124 mm. Faster AND more room. Spacing is a design knob: control points every 60 mm make tight corners and 1.51 s.</p>'+
+    '<p><b>Honest notes:</b> the spacing was picked by trying a few values; a real optimiser would move the control points to minimise the time T directly, with time as the cost (the Shiller and Dubowsky idea on the last slide). Curvature here is computed numerically from the sampled curve.',
+  draw(c,{b,bt}){
+    const A=STRATS[2],B=mkBoard(90,230,520,6,6),O=SP.ph0,Q=SP.ph,sm=Math.max(O.xs[O.xs.length-1],Q.xs[Q.xs.length-1]);
+    drawBoard(c,B,RACE_W);cheese(c,B,[3,5]);
+    strokeS(c,B,A.S,0,A.S.x.length-1,COL.green,(b?14:30)*B.sc,{alpha:b?.45:1});
+    const ch=chart(c,{x:800,y:170,w:1040,h:400},{xmax:sm,ymax:5.4,xlab:'s, distance along path (m)',ylab:'Ṡmax (m/s)'});
+    const ck=chart(c,{x:800,y:665,w:1040,h:185},{xmax:sm,ymax:SP.km,xlab:'',ylab:'|κ| (1/m)'});
+    plot(c,ch,O.xs,O.vl,'#6E5B45',{w:3,dash:[12,9],alpha:b?.4:1});plot(c,ck,O.xs,O.k,COL.green,{w:4,alpha:b?.45:1});
+    txt(c,'arcs + lines',830,215,{size:34,color:COL.green});
+    if(b===0){c.save();c.strokeStyle=COL.red;c.lineWidth=6;c.lineCap='round';
+      for(const k of SP.cliffs){const x=ch.sx(O.xs[k]);c.beginPath();c.moveTo(x,ch.sy(O.vl[k-1]));c.lineTo(x,ch.sy(O.vl[k]));c.stroke()}c.restore();
+      txt(c,'cliffs',1830,215,{size:34,color:COL.red,align:'right'})}
+    if(b>=1){const f=b===1?ease(bt/1.5):1,ctrl=SP.S.ctrl,a=b===1?ease(bt*3):1;
+      c.save();c.globalAlpha=a*.8;c.strokeStyle=COL.purple;c.lineWidth=2;c.setLineDash([6,6]);c.beginPath();ctrl.forEach((p,i)=>i?c.lineTo(B.X(p[0]),B.Y(p[1])):c.moveTo(B.X(p[0]),B.Y(p[1])));c.stroke();c.restore();
+      strokeS(c,B,SP.S,0,Math.floor(f*(SP.S.x.length-1)),COL.purple,30*B.sc);
+      c.save();c.globalAlpha=a;for(const p of ctrl)ringDot(c,B.X(p[0]),B.Y(p[1]),COL.purple,7);c.restore();
+      plot(c,ch,Q.xs,Q.vl,COL.purple,{w:4,upto:sm*f,alpha:b===2?.4:1});plot(c,ck,Q.xs,Q.k,COL.purple,{w:5,upto:sm*f});
+      txt(c,`B-spline · ${ctrl.length} points`,1830,215,{size:34,color:COL.purple,align:'right'})}
+    if(b===2){plot(c,ch,O.xs,O.v,COL.green,{w:5});plot(c,ch,Q.xs,Q.v,COL.purple,{w:6});
+      if(bt>.6){const per=Math.max(A.P.T,SP.P.T)/.4+1,ck2=lp(bt-.6,per)*.4;
+        [[A,COL.green,SP.gap0],[SP,COL.purple,SP.gap]].forEach(([R,col,gap],k)=>{const tt=Math.min(R.P.T,ck2),p=poseAt(R.P,tt);mouseAt(c,B,p,col);
+          drawMouse(c,130,850+k*60,0,24,col);txt(c,`${tt.toFixed(2)} s`,180,862+k*60,{mono:true,size:40,color:col});
+          txt(c,`↔ ${Math.round(gap)} mm`,400,862+k*60,{mono:true,size:30,color:'#7A6346'})})}}
+    cite(c,'cf. Shiller & Lu 1992: discontinuity points')}},
 
 { title:'The race', caption:'Same cells. 3× faster.', builds:2,
   notes:'Same maze, same cells, same physics (1.5 g grip, 4 m/s top speed). Only the motion plan differs. Stop and spin brakes to zero at every corner. Smooth 90s keep moving but at the search-turn speed. Large turns plus diagonals cut corners, run the zigzag as one diagonal, and spend more time at high speed. Shown at half speed; the timers are real planner times. Lecture 1: optimal means time.',
