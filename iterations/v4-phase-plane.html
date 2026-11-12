@@ -1,0 +1,704 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Micromouse Turns</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=JetBrains+Mono:wght@500;700&display=swap">
+<style>
+html,body{margin:0;height:100%;overflow:hidden;background:#C9B48F}
+#cv{position:fixed;inset:0;width:100vw;height:100vh;display:block;cursor:pointer}
+#ui{position:fixed;left:0;top:0;width:1920px;height:1080px;transform-origin:0 0;pointer-events:none}
+#ui>*{pointer-events:auto}
+.ctl{position:absolute;display:flex;align-items:center;gap:18px;font:34px 'DM Serif Display',Georgia,serif;color:#3A2A1A}
+.ctl small{font:700 22px 'JetBrains Mono',Consolas,monospace;color:#7A6346}
+input[type=range]{-webkit-appearance:none;appearance:none;width:330px;height:14px;border-radius:7px;background:#D8C29C;outline:none;cursor:pointer;margin:0}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:46px;height:46px;border-radius:50%;background:#E8302F;border:6px solid #fff;box-shadow:0 3px 8px rgba(80,40,10,.35)}
+input[type=range]::-moz-range-thumb{width:34px;height:34px;border-radius:50%;background:#E8302F;border:6px solid #fff}
+input:focus-visible,button:focus-visible{outline:4px solid #F2D33A;outline-offset:4px}
+.tog{position:absolute;font:34px 'DM Serif Display',Georgia,serif;border:4px solid #8E5BE8;color:#8E5BE8;background:#FBF4E6;border-radius:999px;padding:8px 30px;cursor:pointer}
+.tog.on{background:#8E5BE8;color:#fff}
+#notes{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);width:min(900px,92vw);max-height:42vh;overflow:auto;background:#FFF8EA;border:3px solid #3A2A1A;border-radius:16px;padding:18px 24px;font:18px/1.55 Georgia,serif;color:#2B1E10;box-shadow:0 10px 30px rgba(60,30,0,.3);display:none}
+#notes.on{display:block}
+#notes h3{margin:0 0 6px;font:24px 'DM Serif Display',Georgia,serif;color:#D3262A}
+#notes p{margin:0 0 8px}
+#notes code{font:600 16px 'JetBrains Mono',Consolas,monospace;background:#F3E6CC;padding:1px 6px;border-radius:4px;white-space:nowrap}
+#notes ol{margin:4px 0 8px;padding-left:24px}#notes li{margin-bottom:4px}
+</style>
+</head>
+<body>
+<canvas id="cv" aria-label="Micromouse motion planning slides. Arrow keys to navigate."></canvas>
+<div id="ui"></div>
+<div id="notes" role="note"></div>
+<script>
+"use strict";
+/* ======================= constants ======================= */
+const CELL=180,G=9810;
+const COL={lime:'#B5D334',blue:'#4C8BE8',orange:'#F28C28',magenta:'#C93FD3',red:'#E94545',teal:'#22B8C8',yellow:'#F2D33A',green:'#3CC35A',purple:'#8E5BE8',pink:'#F06BAA',
+  wall:'#E8302F',post:'#A9191C',floor:'#0B0B0B',ink:'#3A2A1A',paper:'#EFE3CF',title:'#D3262A',cap:'#2D5DB8'};
+const SERIF="'DM Serif Display', Georgia, serif",MONO="'JetBrains Mono', Consolas, monospace";
+const Q=new URLSearchParams(location.search);
+const REDUCE=Q.has('final')||matchMedia('(prefers-reduced-motion: reduce)').matches;
+const clamp=(v,a=0,b=1)=>Math.max(a,Math.min(b,v));
+const ease=x=>{x=clamp(x);return x<.5?4*x*x*x:1-Math.pow(-2*x+2,3)/2};
+const lp=(t,T)=>REDUCE?T:t%T; // looping clock; reduced motion shows the end frame
+function rng(seed){return()=>{seed=seed+0x6D2B79F5|0;let t=Math.imul(seed^seed>>>15,1|seed);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+
+/* ======================= physics ======================= */
+const ctr=([i,j])=>[i*CELL+CELL/2,j*CELL+CELL/2];
+const mid=(a,b)=>{const p=ctr(a),q=ctr(b);return[(p[0]+q[0])/2,(p[1]+q[1])/2]};
+function dedupe(p){const o=[p[0]];for(let i=1;i<p.length-1;i++){const a=o[o.length-1],b=p[i],c=p[i+1];const cr=(b[0]-a[0])*(c[1]-b[1])-(b[1]-a[1])*(c[0]-b[0]);if(Math.abs(cr)>1e-6)o.push(b)}o.push(p[p.length-1]);return o}
+function turnPoly(cells){const p=[ctr(cells[0])];for(let i=1;i<cells.length-1;i++){const d1=[cells[i][0]-cells[i-1][0],cells[i][1]-cells[i-1][1]],d2=[cells[i+1][0]-cells[i][0],cells[i+1][1]-cells[i][1]];if(d1[0]!==d2[0]||d1[1]!==d2[1])p.push(ctr(cells[i]))}p.push(ctr(cells[cells.length-1]));return p}
+function midPoly(cells){const p=[ctr(cells[0])];for(let i=0;i<cells.length-1;i++)p.push(mid(cells[i],cells[i+1]));p.push(ctr(cells[cells.length-1]));return dedupe(p)}
+const turnColor=a=>{const d=Math.round(Math.abs(a)*180/Math.PI);return d<=50?COL.blue:d<=100?COL.orange:COL.magenta};
+
+// fillet a polyline; rFor(absAngle, available) -> radius (0 = stop and spin)
+function buildPath(pts,rFor,ds=3){
+  const n=pts.length,legs=[],dirs=[];
+  for(let i=0;i<n-1;i++){const dx=pts[i+1][0]-pts[i][0],dy=pts[i+1][1]-pts[i][1],L=Math.hypot(dx,dy);legs.push(L);dirs.push([dx/L,dy/L])}
+  const th=Array(n).fill(0),t=Array(n).fill(0),r=Array(n).fill(0);
+  for(let i=1;i<n-1;i++){const a=dirs[i-1],b=dirs[i],ang=Math.atan2(a[0]*b[1]-a[1]*b[0],a[0]*b[0]+a[1]*b[1]);th[i]=ang;
+    const ap=i-1===0?legs[i-1]:legs[i-1]/2,an=i+1===n-1?legs[i]:legs[i]/2,rr=rFor(Math.abs(ang),Math.min(ap,an));r[i]=rr;t[i]=rr*Math.tan(Math.abs(ang)/2)}
+  const S={x:[],y:[],k:[],h:[],seg:[],segs:[],spin:{},pts,legs,dirs,th,r};
+  const push=(x,y,k,h,g)=>{S.x.push(x);S.y.push(y);S.k.push(k);S.h.push(h);S.seg.push(g)};
+  let hc=Math.atan2(dirs[0][1],dirs[0][0]); // continuous heading, no wrap jumps
+  for(let i=0;i<n-1;i++){
+    const d=dirs[i],diag=Math.abs(d[0])>1e-6&&Math.abs(d[1])>1e-6;
+    const st=[pts[i][0]+d[0]*t[i],pts[i][1]+d[1]*t[i]],en=[pts[i+1][0]-d[0]*t[i+1],pts[i+1][1]-d[1]*t[i+1]];
+    const L=Math.max(0,legs[i]-t[i]-t[i+1]),m=Math.max(1,Math.ceil(L/ds));
+    const g=S.segs.push({kind:diag?'diag':'straight',color:diag?COL.red:COL.lime})-1;
+    for(let q=S.x.length?1:0;q<=m;q++)push(st[0]+(en[0]-st[0])*q/m,st[1]+(en[1]-st[1])*q/m,0,hc,g);
+    if(i+1<=n-2){const a=th[i+1],rr=r[i+1];
+      if(rr===0){S.spin[S.x.length-1]=a;hc+=a}
+      else{const sg=Math.sign(a),nr=[-d[1],d[0]],c=[en[0]+sg*rr*nr[0],en[1]+sg*rr*nr[1]],p0=Math.atan2(en[1]-c[1],en[0]-c[0]),A=Math.abs(a),mm=Math.max(2,Math.ceil(rr*A/ds));
+        const ga=S.segs.push({kind:'turn',ang:a,r:rr,color:turnColor(a)})-1;
+        for(let q=1;q<=mm;q++){const ph=p0+sg*A*q/mm;push(c[0]+rr*Math.cos(ph),c[1]+rr*Math.sin(ph),sg/rr,hc+sg*A*q/mm,ga)}
+        hc+=a}}
+  }
+  return finish(S);
+}
+function finish(S){S.s=[0];for(let i=1;i<S.x.length;i++)S.s.push(S.s[i-1]+Math.hypot(S.x[i]-S.x[i-1],S.y[i]-S.y[i-1]));return S}
+
+// path from a curvature profile: segs [{L,k0,k1}] or {spin}
+function profilePath(segs,start=[0,0],h0=Math.PI/2,ds=2){
+  const S={x:[start[0]],y:[start[1]],k:[0],h:[h0],seg:[0],segs:[{kind:'straight',color:COL.lime}],spin:{}};let x=start[0],y=start[1],h=h0;
+  for(const g of segs){
+    if(g.spin!==undefined){S.spin[S.x.length-1]=g.spin;h+=g.spin;continue}
+    const m=Math.max(1,Math.ceil(g.L/ds)),d=g.L/m,k1=g.k1??g.k0;
+    for(let q=1;q<=m;q++){const km=g.k0+(k1-g.k0)*(q-.5)/m,hn=h+km*d;x+=Math.cos((h+hn)/2)*d;y+=Math.sin((h+hn)/2)*d;h=hn;S.x.push(x);S.y.push(y);S.k.push(g.k0+(k1-g.k0)*q/m);S.h.push(h);S.seg.push(0)}
+  }
+  return finish(S);
+}
+
+// time-optimal speed along a fixed path (friction circle), forward + backward pass
+function topp(S,Ag,Vms){
+  const A=Ag*G,V=Vms*1000,n=S.x.length,vl=new Float64Array(n),vf=new Float64Array(n),vb=new Float64Array(n),v=new Float64Array(n);
+  for(let i=0;i<n;i++){const k=Math.abs(S.k[i]);vl[i]=k>1e-9?Math.min(V,Math.sqrt(A/k)):V;if(S.spin[i]!==undefined)vl[i]=0}
+  vl[0]=0;
+  const free=(vv,k)=>{const al=vv*vv*Math.abs(k);return Math.max(Math.sqrt(Math.max(0,A*A-al*al)),A*.02)};
+  for(let i=0;i<n-1;i++){const ds=S.s[i+1]-S.s[i];vf[i+1]=Math.min(vl[i+1],Math.sqrt(vf[i]*vf[i]+2*free(vf[i],S.k[i])*ds))}
+  vb[n-1]=vl[n-1];for(let i=n-2;i>=0;i--){const ds=S.s[i+1]-S.s[i];vb[i]=Math.min(vl[i],Math.sqrt(vb[i+1]*vb[i+1]+2*free(vb[i+1],S.k[i+1])*ds))}
+  for(let i=0;i<n;i++)v[i]=Math.min(vf[i],vb[i]);
+  const alpha=A/35; // in-place spin: wheel accel / half track (70 mm track)
+  const tA=new Float64Array(n),tD=new Float64Array(n);let stops=0,peakV=0;
+  for(let i=0;i<n;i++){
+    if(i>0){const ds=S.s[i]-S.s[i-1],vs=v[i]+v[i-1];tA[i]=tD[i-1]+(vs>1e-9?2*ds/vs:0)}
+    tD[i]=tA[i];if(S.spin[i]!==undefined){tD[i]+=2*Math.sqrt(Math.abs(S.spin[i])/alpha);stops++}
+    peakV=Math.max(peakV,v[i])}
+  return{v,vl,vf,vb,tA,tD,T:tD[n-1],stops,peakV:peakV/1000,S};
+}
+function poseAt(P,T){const{tA,tD,S}=P,n=S.x.length;
+  if(T<=0)return{x:S.x[0],y:S.y[0],h:S.h[0],i:0};
+  if(T>=tD[n-1])return{x:S.x[n-1],y:S.y[n-1],h:S.h[n-1],i:n-1,done:true};
+  let lo=0,hi=n-1;while(hi-lo>1){const m=(lo+hi)>>1;if(tA[m]<=T)lo=m;else hi=m}
+  const i=lo,sp=S.spin[i]||0;
+  if(T<tD[i]){const f=(T-tA[i])/(tD[i]-tA[i]);return{x:S.x[i],y:S.y[i],h:S.h[i]+sp*f,i}}
+  const f=clamp((T-tD[i])/Math.max(1e-9,tA[i+1]-tD[i])),h0=S.h[i]+sp;
+  return{x:S.x[i]+(S.x[i+1]-S.x[i])*f,y:S.y[i]+(S.y[i+1]-S.y[i])*f,h:h0+(S.h[i+1]-h0)*f,i}}
+const minTurnV=(S,P)=>{let m=Infinity;S.k.forEach((k,i)=>{if(k)m=Math.min(m,P.v[i])});return m===Infinity?0:m/1000};
+const turnCount=S=>S.segs.filter(g=>g.kind==='turn').length+Object.keys(S.spin).length;
+
+/* ---- maze graph: walls are keys "h i,j" (y = j cells, x from i to i+1) and "v i,j" ---- */
+const DIRS=[[0,1],[1,0],[0,-1],[-1,0]];
+const edgeKey=(i,j,di,dj)=>di===1?`v${i+1},${j}`:di===-1?`v${i},${j}`:dj===1?`h${i},${j+1}`:`h${i},${j}`;
+function allWalls(W,H){const s=new Set();for(let i=0;i<W;i++)for(let j=0;j<=H;j++)s.add(`h${i},${j}`);for(let i=0;i<=W;i++)for(let j=0;j<H;j++)s.add(`v${i},${j}`);return s}
+const isBoundary=(k,W,H)=>{const[a,b]=k.slice(1).split(',').map(Number);return k[0]==='h'?(b===0||b===H):(a===0||a===W)};
+const sides=k=>{const[a,b]=k.slice(1).split(',').map(Number);return k[0]==='h'?[[a,b-1],[a,b]]:[[a-1,b],[a,b]]};
+function genMaze(W,H,seed,loops,goals){
+  const R=rng(seed),walls=allWalls(W,H),seen=new Set(['0,0']),st=[[0,0]];
+  while(st.length){const[i,j]=st[st.length-1];
+    const nb=DIRS.filter(([di,dj])=>{const a=i+di,b=j+dj;return a>=0&&b>=0&&a<W&&b<H&&!seen.has(a+','+b)});
+    if(!nb.length){st.pop();continue}
+    const[di,dj]=nb[Math.floor(R()*nb.length)];walls.delete(edgeKey(i,j,di,dj));seen.add((i+di)+','+(j+dj));st.push([i+di,j+dj])}
+  for(const[i,j]of goals)for(const[di,dj]of DIRS)if(goals.some(g=>g[0]===i+di&&g[1]===j+dj))walls.delete(edgeKey(i,j,di,dj));
+  const inner=[...walls].filter(k=>!isBoundary(k,W,H));
+  for(let n=0;n<loops&&inner.length;n++)walls.delete(inner.splice(Math.floor(R()*inner.length),1)[0]);
+  return walls;
+}
+// walls for hand-drawn routes: every edge is a wall except route steps; off-route edges open with probability p
+function pathMaze(paths,W,H,p=.5,seed=1){
+  const R=rng(seed),walls=allWalls(W,H),on=new Set();
+  for(const c of paths)for(let i=0;i<c.length;i++){on.add(c[i]+'');if(i)walls.delete(edgeKey(c[i-1][0],c[i-1][1],c[i][0]-c[i-1][0],c[i][1]-c[i-1][1]))}
+  for(const k of[...walls]){if(isBoundary(k,W,H))continue;const[s1,s2]=sides(k);if(!on.has(s1+'')&&!on.has(s2+'')&&R()<p)walls.delete(k)}
+  return walls;
+}
+const blocked=(walls,i,j,di,dj)=>walls.has(edgeKey(i,j,di,dj));
+function flood(walls,W,H,goals){const D=Array.from({length:W},()=>Array(H).fill(Infinity)),q=[];let max=0;
+  for(const g of goals){D[g[0]][g[1]]=0;q.push(g)}
+  for(let h=0;h<q.length;h++){const[i,j]=q[h];for(const[di,dj]of DIRS){const a=i+di,b=j+dj;if(a<0||b<0||a>=W||b>=H||blocked(walls,i,j,di,dj))continue;if(D[a][b]>D[i][j]+1){D[a][b]=D[i][j]+1;max=Math.max(max,D[a][b]);q.push([a,b])}}}
+  return{D,max}}
+function descend(walls,W,H,D,start){if(!isFinite(D[start[0]][start[1]]))return null;const p=[start];let c=start,pd=null;
+  while(D[c[0]][c[1]]>0){let best=null;for(const[di,dj]of DIRS){const a=c[0]+di,b=c[1]+dj;if(a<0||b<0||a>=W||b>=H||blocked(walls,c[0],c[1],di,dj))continue;
+      if(D[a][b]===D[c[0]][c[1]]-1){const straight=pd&&pd[0]===di&&pd[1]===dj;if(!best||straight)best=[a,b,di,dj]}}
+    c=[best[0],best[1]];pd=[best[2],best[3]];p.push(c)}return p}
+// online search: the mouse only knows walls it has sensed, re-floods every step, rolls downhill
+function searchRun(walls,W,H,goals,start){
+  const known=new Set([...allWalls(W,H)].filter(k=>isBoundary(k,W,H))),path=[start];let c=start,pd=[0,1];
+  const atGoal=c=>goals.some(g=>g[0]===c[0]&&g[1]===c[1]);
+  for(let step=0;step<4000&&!atGoal(c);step++){
+    for(const[di,dj]of DIRS){const k=edgeKey(c[0],c[1],di,dj);if(walls.has(k))known.add(k)}
+    const{D}=flood(known,W,H,goals);let best=null,bd=Infinity;
+    for(const[di,dj]of DIRS){const a=c[0]+di,b=c[1]+dj;if(a<0||b<0||a>=W||b>=H||known.has(edgeKey(c[0],c[1],di,dj)))continue;
+      const d=D[a][b]+(di===pd[0]&&dj===pd[1]?0:.1);if(d<bd){bd=d;best=[a,b,di,dj]}}
+    c=[best[0],best[1]];pd=[best[2],best[3]];path.push(c)}
+  return path}
+
+/* ======================= draw ======================= */
+function mkBoard(x,y,size,W,H){const sc=size/(Math.max(W,H)*CELL),w=W*CELL*sc,h=H*CELL*sc;return{x,y,w,h,W,H,sc,X:m=>x+m*sc,Y:m=>y+h-m*sc}}
+function roughRect(c,x,y,w,h,j,seed){const R=rng(seed),pts=[];
+  const edge=(x0,y0,x1,y1)=>{const m=Math.max(2,Math.round(Math.hypot(x1-x0,y1-y0)/30));for(let q=0;q<m;q++){const f=q/m;pts.push([x0+(x1-x0)*f+(R()-.5)*j,y0+(y1-y0)*f+(R()-.5)*j])}};
+  edge(x,y,x+w,y);edge(x+w,y,x+w,y+h);edge(x+w,y+h,x,y+h);edge(x,y+h,x,y);
+  c.beginPath();pts.forEach((p,i)=>i?c.lineTo(p[0],p[1]):c.moveTo(p[0],p[1]));c.closePath()}
+function drawBoard(c,B,walls,under,outline){const f=Math.max(12,B.sc*46);
+  c.save();c.shadowColor='rgba(90,55,20,.4)';c.shadowBlur=26;c.shadowOffsetX=7;c.shadowOffsetY=12;
+  roughRect(c,B.x-f,B.y-f,B.w+2*f,B.h+2*f,5,Math.round(B.x*3+B.y*7+B.w));c.fillStyle=COL.wall;c.fill();c.restore();
+  c.strokeStyle='#B8211F';c.lineWidth=2;c.stroke();
+  c.fillStyle=COL.floor;c.fillRect(B.x,B.y,B.w,B.h);
+  c.strokeStyle='rgba(255,255,255,.075)';c.lineWidth=1;c.beginPath();
+  for(let i=1;i<B.W;i++){c.moveTo(B.X(i*CELL),B.y);c.lineTo(B.X(i*CELL),B.y+B.h)}
+  for(let j=1;j<B.H;j++){c.moveTo(B.x,B.Y(j*CELL));c.lineTo(B.x+B.w,B.Y(j*CELL))}c.stroke();
+  if(under)under();
+  if(walls)drawWalls(c,B,walls,null,outline)}
+function drawWalls(c,B,walls,posts,outline){const lw=Math.max(3,12*B.sc);c.lineCap='butt';c.beginPath();
+  for(const w of walls){const[a,b]=w.slice(1).split(',').map(Number);
+    if(w[0]==='h'){c.moveTo(B.X(a*CELL),B.Y(b*CELL));c.lineTo(B.X((a+1)*CELL),B.Y(b*CELL))}else{c.moveTo(B.X(a*CELL),B.Y(b*CELL));c.lineTo(B.X(a*CELL),B.Y((b+1)*CELL))}}
+  if(outline){c.strokeStyle=COL.floor;c.lineWidth=lw+10;c.stroke()}c.strokeStyle=COL.wall;c.lineWidth=outline?lw*1.6:lw;c.stroke();const pr=Math.max(2.5,8*B.sc)*(outline?1.6:1);c.fillStyle=COL.post;
+  if(posts){for(const[i,j]of posts)c.fillRect(B.X(i*CELL)-pr,B.Y(j*CELL)-pr,2*pr,2*pr);return}
+  for(let i=0;i<=B.W;i++)for(let j=0;j<=B.H;j++)c.fillRect(B.X(i*CELL)-pr,B.Y(j*CELL)-pr,2*pr,2*pr)}
+// a board made only of some cells (the zigzag strip)
+function drawMaskBoard(c,B,cells,walls){
+  c.save();c.shadowColor='rgba(90,55,20,.45)';c.shadowBlur=24;c.shadowOffsetX=6;c.shadowOffsetY=10;c.fillStyle=COL.floor;c.beginPath();
+  for(const[i,j]of cells)c.rect(B.X(i*CELL)-1,B.Y((j+1)*CELL)-1,CELL*B.sc+2,CELL*B.sc+2);c.fill();c.restore();
+  const ws=new Set(),posts=new Map();
+  for(const[i,j]of cells){for(const[di,dj]of DIRS){const k=edgeKey(i,j,di,dj);if(walls.has(k))ws.add(k)}for(const p of[[i,j],[i+1,j],[i,j+1],[i+1,j+1]])posts.set(p+'',p)}
+  drawWalls(c,B,ws,[...posts.values()])}
+function strokeS(c,B,S,i0,i1,color,w,{alpha=1}={}){i1=Math.min(i1,S.x.length-1);if(i1<=i0)return;const amp=w*.07;
+  const P=i=>{const n=Math.sin(S.s[i]*.017+1.7)+.6*Math.sin(S.s[i]*.043+.3),hh=-S.h[i];return[B.X(S.x[i])-Math.sin(hh)*n*amp,B.Y(S.y[i])+Math.cos(hh)*n*amp]};
+  c.save();c.globalAlpha=alpha;c.lineCap='round';c.lineJoin='round';c.lineWidth=w;
+  const run=(a,b,col)=>{if(b<=a)return;c.strokeStyle=col;c.beginPath();for(let i=a;i<=b;i++){const p=P(i);i===a?c.moveTo(p[0],p[1]):c.lineTo(p[0],p[1])}c.stroke()};
+  if(color!=='seg')run(i0,i1,color);
+  else{let a=i0;for(let i=i0+1;i<=i1+1;i++){if(i>i1||S.seg[i]!==S.seg[a]){run(Math.max(i0,a-1),i-1,S.segs[S.seg[a]].color);a=i}}}
+  c.restore()}
+function cellTrail(c,B,cells,f,color,w,alpha=1){const n=Math.min(cells.length-1,Math.floor(f));c.save();c.globalAlpha=alpha;c.strokeStyle=color;c.lineWidth=w;c.lineCap='round';c.lineJoin='round';c.beginPath();
+  for(let i=0;i<=n;i++){const[x,y]=ctr(cells[i]);i?c.lineTo(B.X(x),B.Y(y)):c.moveTo(B.X(x),B.Y(y))}
+  const fr=f-n;if(n<cells.length-1&&fr>0){const a=ctr(cells[n]),b=ctr(cells[n+1]);c.lineTo(B.X(a[0]+(b[0]-a[0])*fr),B.Y(a[1]+(b[1]-a[1])*fr))}
+  c.stroke();c.restore()}
+function cellPose(cells,f){f=clamp(f,0,cells.length-1);const n=Math.min(cells.length-2,Math.floor(f)),fr=f-n,a=ctr(cells[n]),b=ctr(cells[n+1]);
+  return{x:a[0]+(b[0]-a[0])*fr,y:a[1]+(b[1]-a[1])*fr,h:Math.atan2(b[1]-a[1],b[0]-a[0])}}
+
+// top-down mouse sprite, nose along +x before rotation
+function drawMouse(c,x,y,ang,s,accent){c.save();c.translate(x,y);c.rotate(ang);
+  c.lineCap='round';c.strokeStyle='#E79AAA';c.lineWidth=s*.09;c.beginPath();c.moveTo(-s*.5,0);c.bezierCurveTo(-s*.85,s*.32,-s*1.02,-s*.3,-s*1.28,s*.06);c.stroke();
+  c.fillStyle='rgba(0,0,0,.35)';c.beginPath();c.ellipse(s*.07,s*.09,s*.62,s*.42,0,0,7);c.fill();
+  const g=c.createRadialGradient(-s*.1,-s*.15,s*.05,0,0,s*.75);g.addColorStop(0,'#FFFFFF');g.addColorStop(1,'#C4C0B9');
+  c.fillStyle=g;c.strokeStyle='#5E5A54';c.lineWidth=Math.max(1.5,s*.05);
+  c.beginPath();c.ellipse(-s*.05,0,s*.55,s*.38,0,0,7);c.fill();c.stroke();
+  c.beginPath();c.moveTo(s*.2,-s*.32);c.quadraticCurveTo(s*.82,-s*.14,s*.9,0);c.quadraticCurveTo(s*.82,s*.14,s*.2,s*.32);c.closePath();c.fill();c.stroke();
+  if(accent){c.fillStyle=accent;c.beginPath();c.ellipse(-s*.17,0,s*.26,s*.2,0,0,7);c.fill()}
+  for(const sg of[-1,1]){c.fillStyle='#DAD5CE';c.beginPath();c.arc(s*.28,sg*s*.31,s*.17,0,7);c.fill();c.stroke();c.fillStyle='#F2A7B8';c.beginPath();c.arc(s*.28,sg*s*.31,s*.1,0,7);c.fill()}
+  c.fillStyle='#111';for(const sg of[-1,1]){c.beginPath();c.arc(s*.6,sg*s*.1,s*.055,0,7);c.fill()}
+  c.fillStyle='#F07C98';c.beginPath();c.arc(s*.9,0,s*.075,0,7);c.fill();c.restore()}
+const mouseAt=(c,B,p,accent)=>drawMouse(c,B.X(p.x),B.Y(p.y),-p.h,Math.max(15,62*B.sc),accent);
+
+function txt(c,s,x,y,{size=40,mono=false,color=COL.ink,align='left',base='alphabetic',italic=false,alpha=1}={}){
+  c.save();c.globalAlpha=alpha;c.font=mono?`700 ${size}px ${MONO}`:`${italic?'italic ':''}${size}px ${SERIF}`;c.fillStyle=color;c.textAlign=align;c.textBaseline=base;c.fillText(s,x,y);c.restore()}
+function emoji(c,e,x,y,size){c.save();c.font=`${size}px "Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji",sans-serif`;c.textAlign='center';c.textBaseline='middle';c.fillText(e,x,y);c.restore()}
+const cheese=(c,B,cell)=>{const[x,y]=ctr(cell);emoji(c,'🧀',B.X(x),B.Y(y),CELL*B.sc*.55)};
+function rrect(c,x,y,w,h,r){c.beginPath();c.moveTo(x+r,y);c.arcTo(x+w,y,x+w,y+h,r);c.arcTo(x+w,y+h,x,y+h,r);c.arcTo(x,y+h,x,y,r);c.arcTo(x,y,x+w,y,r);c.closePath()}
+function fatArrow(c,x0,y0,x1,y1,w,color){const a=Math.atan2(y1-y0,x1-x0),L=Math.hypot(x1-x0,y1-y0),hl=Math.min(L*.5,w*1.3);c.save();c.translate(x0,y0);c.rotate(a);c.fillStyle=color;
+  c.beginPath();c.moveTo(0,-w/2);c.lineTo(L-hl,-w/2);c.lineTo(L-hl,-w);c.lineTo(L,0);c.lineTo(L-hl,w);c.lineTo(L-hl,w/2);c.lineTo(0,w/2);c.closePath();c.fill();c.restore()}
+
+/* ---- charts on parchment ---- */
+function niceStep(m){const r=m/4,p=Math.pow(10,Math.floor(Math.log10(r))),f=r/p;return(f<1.5?1:f<3?2:f<7?5:10)*p}
+function chart(c,bx,{xmax,ymax,xlab,ylab}){const{x:L,y:T,w:W,h:H}=bx,sx=v=>L+v/xmax*W,sy=v=>T+H-v/ymax*H;
+  c.fillStyle='rgba(255,250,240,.6)';c.fillRect(L,T,W,H);
+  c.strokeStyle='rgba(90,60,30,.16)';c.lineWidth=1.5;c.font=`500 19px ${MONO}`;c.fillStyle='#7A6346';
+  const xs=niceStep(xmax),ys=niceStep(ymax);c.beginPath();
+  for(let v=xs;v<=xmax+1e-9;v+=xs){c.moveTo(sx(v),T);c.lineTo(sx(v),T+H)}for(let v=ys;v<=ymax+1e-9;v+=ys){c.moveTo(L,sy(v));c.lineTo(L+W,sy(v))}c.stroke();
+  c.textAlign='center';c.textBaseline='top';for(let v=0;v<=xmax+1e-9;v+=xs)c.fillText(+v.toFixed(2),sx(v),T+H+8);
+  c.textAlign='right';c.textBaseline='middle';for(let v=0;v<=ymax+1e-9;v+=ys)c.fillText(+v.toFixed(2),L-10,sy(v));
+  c.strokeStyle=COL.ink;c.lineWidth=3;c.beginPath();c.moveTo(L,T-6);c.lineTo(L,T+H);c.lineTo(L+W+6,T+H);c.stroke();
+  txt(c,xlab,L+W,T+H+56,{size:26,italic:true,align:'right'});
+  c.save();c.translate(L-58,T);c.rotate(-Math.PI/2);txt(c,ylab,0,0,{size:26,italic:true,align:'right'});c.restore();
+  return{sx,sy,bx}}
+function plot(c,ch,xs,ys,color,{w=4,dash,from=-Infinity,upto=Infinity,alpha=1,fill=false}={}){const{bx,sx,sy}=ch;
+  c.save();c.beginPath();c.rect(bx.x,bx.y-8,bx.w,bx.h+12);c.clip();c.globalAlpha=alpha;c.strokeStyle=color;c.lineWidth=w;c.lineJoin='round';c.lineCap='round';c.setLineDash(dash||[]);
+  c.beginPath();let first=-1,last=-1;for(let i=0;i<xs.length;i++){if(xs[i]<from||xs[i]>upto)continue;if(first<0){first=i;c.moveTo(sx(xs[i]),sy(ys[i]))}else c.lineTo(sx(xs[i]),sy(ys[i]));last=i}
+  c.stroke();if(fill&&first>=0){c.lineTo(sx(xs[last]),sy(0));c.lineTo(sx(xs[first]),sy(0));c.closePath();c.globalAlpha=alpha*.15;c.fillStyle=color;c.fill()}c.restore()}
+function series(P,fn){const xs=[],ys=[],n=P.S.x.length,st=Math.max(1,Math.floor(n/600));
+  for(let i=0;i<n;i+=st){xs.push(P.tA[i]);ys.push(fn(i));if(P.tD[i]>P.tA[i]){xs.push(P.tD[i]);ys.push(fn(i))}}xs.push(P.tD[n-1]);ys.push(fn(n-1));return{xs,ys}}
+
+/* ======================= shared mazes and strategies ======================= */
+const spinR=()=>0,smoothR=(a,av)=>Math.min(90,av/Math.tan(a/2)),bigR=(a,av)=>Math.min(420,av/Math.tan(a/2));
+const RACE=[[0,0],[0,1],[0,2],[1,2],[2,2],[2,1],[3,1],[3,0],[4,0],[5,0],[5,1],[5,2],[4,2],[4,3],[3,3],[3,4],[3,5]];
+const RACE_W=pathMaze([RACE],6,6,.5,7);
+const STRATS=[{name:'Stop & spin',color:COL.orange,S:buildPath(turnPoly(RACE),spinR)},
+              {name:'Smooth 90s',color:COL.blue,S:buildPath(turnPoly(RACE),smoothR)},
+              {name:'Turns + diagonals',color:COL.green,S:buildPath(midPoly(RACE),bigR)}];
+STRATS.forEach(s=>s.P=topp(s.S,1.5,4));
+const CORNER=[[0,0],[0,1],[0,2],[0,3],[1,3],[2,3],[3,3]],CORNER_W=pathMaze([CORNER],4,4,1);
+
+/* ======================= scenes ======================= */
+// 2: the challenge
+const BIG_G=[[7,7],[8,7],[7,8],[8,8]],BIG=genMaze(16,16,11,8,BIG_G);
+const SEARCH=searchRun(BIG,16,16,BIG_G,[0,0]);
+const FAST={S:buildPath(midPoly(descend(BIG,16,16,flood(BIG,16,16,BIG_G).D,[0,0])),bigR)};FAST.P=topp(FAST.S,1.5,4);
+// 3: flood
+const FL_G=[[3,3],[4,3],[3,4],[4,4]],FL0=genMaze(8,8,21,9,FL_G);let FLW=new Set(FL0),flFull=false;
+const WAVE=['#F2D33A','#F5B731','#F28C28','#EE6A3A','#E94545','#D9437E','#C93FD3','#8E5BE8','#4C8BE8','#22B8C8','#3CC35A','#B5D334'];
+// 4: shortest vs fastest
+const SV=[{cells:[[0,0],[0,1],[1,1],[1,2],[2,2],[2,3],[3,3],[3,4],[4,4],[4,5]],color:COL.magenta},
+          {cells:[[0,0],[1,0],[2,0],[3,0],[4,0],[5,0],[5,1],[5,2],[5,3],[5,4],[5,5],[4,5]],color:COL.green}];
+SV.forEach(o=>{o.S=buildPath(turnPoly(o.cells),smoothR);o.P=topp(o.S,1.5,4)});
+const SV_W=pathMaze(SV.map(o=>o.cells),6,6,.5,4);
+// 5: one corner three ways
+const C3=[{name:'Stop & spin',color:COL.orange,r:0},{name:'Search turn',color:COL.blue,r:90},{name:'Large turn',color:COL.magenta,r:180}]
+  .map(o=>{const S=buildPath(turnPoly(CORNER),()=>o.r),P=topp(S,1.5,4);return{...o,S,P,vc:minTurnV(S,P)}});
+// 6: corner lab
+function cornerPath(r,clo){
+  if(r===0)return profilePath([{L:540,k0:0},{spin:-Math.PI/2},{L:540,k0:0}]);
+  let turn;
+  if(!clo)turn=[{L:Math.PI*r/2,k0:-1/r}];
+  else{const Lc=Math.PI*r/4;turn=[{L:Lc,k0:0,k1:-1/r},{L:Math.PI*r/4,k0:-1/r},{L:Lc,k0:-1/r,k1:0}]}
+  const T=profilePath(turn,[0,0],Math.PI/2),set=T.y[T.y.length-1];
+  return profilePath([{L:Math.max(0,540-set),k0:0},...turn,{L:Math.max(0,540-T.x[T.x.length-1]),k0:0}]);
+}
+const LAB={r:120,a:1.5,clo:false};
+function labCompute(){const S=cornerPath(LAB.r,LAB.clo&&LAB.r>0);S.x=S.x.map(v=>v+90);S.y=S.y.map(v=>v+90);LAB.S=S;LAB.P=topp(S,LAB.a,4);LAB.vc=minTurnV(S,LAB.P)}
+labCompute();
+// 7: turn library, all from one entry (mm on a 5x5 board)
+const LIB=[
+  {name:'Search 90°',color:COL.orange,pts:[[450,90],[450,270],[810,270]],r:90},
+  {name:'Large 90°',color:COL.yellow,pts:[[450,90],[450,450],[90,450]],r:180},
+  {name:'Long 180°',color:COL.magenta,pts:[[450,90],[450,630],[630,630],[630,270]],r:90},
+  {name:'45° in',color:COL.blue,pts:[[450,90],[450,360],[90,720]],r:250},
+  {name:'135° in',color:COL.purple,pts:[[450,90],[450,540],[810,180]],r:120},
+  {name:'Diagonal V90',color:COL.teal,pts:[[450,90],[450,360],[630,540],[360,810]],r:250}];
+LIB.forEach(m=>{m.S=buildPath(m.pts,(a,av)=>Math.min(m.r,av/Math.tan(a/2)));m.P=topp(m.S,1.5,4);m.rmin=Math.min(...m.S.segs.filter(s=>s.kind==='turn').map(s=>s.r))});
+const LIB_W=pathMaze([],5,5,1);
+// 8: zigzag strip
+const ZZ=[[0,0]];for(let k=0;k<7;k++){ZZ.push([k+1,k]);ZZ.push([k+1,k+1])}
+const ZZ_W=pathMaze([ZZ],8,8,0);
+const ZZP=[{color:COL.teal,S:buildPath(turnPoly(ZZ),smoothR)},{color:COL.orange,S:buildPath(midPoly(ZZ),bigR)}];ZZP.forEach(o=>o.P=topp(o.S,1.5,4));
+// 9: command chain
+const RAWC=[];for(let i=0;i<RACE.length-1;i++){const d=[RACE[i+1][0]-RACE[i][0],RACE[i+1][1]-RACE[i][1]];let L='F';
+  if(i>0){const p=[RACE[i][0]-RACE[i-1][0],RACE[i][1]-RACE[i-1][1]],cr=p[0]*d[1]-p[1]*d[0];if(cr>0)L='L';else if(cr<0)L='R'}RAWC.push({L,cell:RACE[i],h:Math.atan2(d[1],d[0])})}
+const PIECES=[];{const S=STRATS[2].S;let a=0;for(let i=1;i<=S.x.length;i++){if(i===S.x.length||S.seg[i]!==S.seg[a]){
+  const g=S.segs[S.seg[a]],a0=Math.max(0,a-1),len=S.s[i-1]-S.s[a0],last=PIECES[PIECES.length-1];
+  if(g.kind==='turn'&&last&&last.ang&&Math.sign(last.ang)===Math.sign(g.ang)){last.ang+=g.ang;last.b=i-1} // two 45 fillets = one library turn
+  else if(g.kind==='turn')PIECES.push({a:a0,b:i-1,ang:g.ang});
+  else if(len>=45)PIECES.push({a:a0,b:i-1,color:g.color,lab:g.kind==='diag'?'D'+Math.max(1,Math.round(len/(CELL/Math.SQRT2))):'F'+Math.round(len/90)/2});
+  a=i}}
+  for(const p of PIECES)if(p.ang){p.color=turnColor(p.ang);p.lab=(p.ang>0?'L':'R')+Math.round(Math.abs(p.ang)*180/Math.PI)}}
+function glyph(c,x,y,s,L,ang,alpha=1){c.save();c.globalAlpha=alpha;
+  if(L==='F'){c.translate(x,y);c.rotate(ang);fatArrow(c,-s*1.05,0,s*1.1,0,s*.95,COL.yellow);c.fillStyle='#1B1B1B';c.font=`700 ${s*.8}px ${MONO}`;c.textAlign='center';c.textBaseline='middle';c.rotate(-ang);c.fillText('F',0,1)}
+  else{c.fillStyle=L==='R'?COL.wall:COL.blue;c.beginPath();c.arc(x,y,s,0,7);c.fill();c.strokeStyle='#fff';c.lineWidth=s*.14;c.stroke();c.fillStyle='#fff';c.font=`700 ${s*1.05}px ${MONO}`;c.textAlign='center';c.textBaseline='middle';c.fillText(L,x,y+1)}
+  c.restore()}
+function arrowPiece(c,B,S,a,b,f,color,w){const end=Math.floor(a+(b-a)*clamp(f));if(end<=a+1)return;
+  const sA=S.s[a]+12,hl=w*1.15/B.sc,sE=S.s[end]-hl*.75;const pts=[];
+  for(let i=a;i<=end;i++){if(S.s[i]<sA||S.s[i]>sE)continue;pts.push([B.X(S.x[i]),B.Y(S.y[i])])}
+  c.save();c.strokeStyle=color;c.fillStyle=color;c.lineWidth=w;c.lineCap='butt';c.lineJoin='round';
+  if(pts.length>1){c.beginPath();pts.forEach((p,i)=>i?c.lineTo(p[0],p[1]):c.moveTo(p[0],p[1]));c.stroke()}
+  const hx=B.X(S.x[end]),hy=B.Y(S.y[end]),ha=-S.h[end],hw=w*.95,hp=w*1.15;
+  c.translate(hx,hy);c.rotate(ha);c.beginPath();c.moveTo(0,0);c.lineTo(-hp,-hw);c.lineTo(-hp,hw);c.closePath();c.fill();c.restore()}
+// 10: phase plane data
+const PH=(()=>{const P=STRATS[2].P,S=P.S,n=S.x.length,st=Math.max(1,Math.floor(n/700)),o={xs:[],vl:[],vf:[],vb:[],v:[],idx:[]};
+  for(let i=0;i<n;i+=st){o.xs.push(S.s[i]/1000);o.vl.push(Math.min(P.vl[i],4600)/1000);o.vf.push(P.vf[i]/1000);o.vb.push(P.vb[i]/1000);o.v.push(P.v[i]/1000);o.idx.push(i)}
+  o.sw=[];o.ride=[]; // accel->brake switch points, and samples where the plan slides along the limit curve inside a turn
+  for(let k=0;k<o.xs.length;k++){const i=o.idx[k];
+    if(k&&P.vf[o.idx[k-1]]<P.vb[o.idx[k-1]]-1&&P.vf[i]>=P.vb[i]-1&&P.v[i]<P.vl[i]*.995)o.sw.push(k);
+    o.ride.push(P.vl[i]>0&&P.vl[i]<3990&&P.v[i]>=P.vl[i]*.995?o.v[k]:NaN)}
+  o.smax=S.s[n-1]/1000;return o})();
+const idxAtS=(S,s)=>{let lo=0,hi=S.s.length-1;while(hi-lo>1){const m=(lo+hi)>>1;if(S.s[m]<=s)lo=m;else hi=m}return lo};
+// speed-plan sequence helpers (after Shiller & Lu 1992)
+const RUNS=(()=>{const r=[];for(let k=0;k<PH.ride.length;){if(isNaN(PH.ride[k])){k++;continue}let e=k;while(e+1<PH.ride.length&&!isNaN(PH.ride[e+1]))e++;r.push([k,e]);k=e+1}return r})();
+const ZM=(()=>{const R=RUNS[RUNS.length-1],s0=Math.max(0,PH.xs[R[0]]-.45),s1=Math.min(PH.smax,PH.xs[R[1]]+.3),ks=[];
+  PH.xs.forEach((x,k)=>{if(x>=s0&&x<=s1)ks.push(k)});const g=a=>ks.map(k=>a[k]);
+  const o={R,s0,s1,ks,x:ks.map(k=>PH.xs[k]-s0),vl:g(PH.vl),vf:g(PH.vf),vb:g(PH.vb),v:g(PH.v),ride:g(PH.ride),sw:PH.sw.filter(k=>k>=ks[0]&&k<=ks[ks.length-1])};
+  o.jump=o.vl.findLastIndex((v,j)=>j>0&&o.vl[j-1]>3.9&&v<3.9&&o.x[j]<=PH.xs[R[0]]-s0+.02);return o})();
+const A_MS=1.5*G/1000; // grip in m/s^2, same 1.5 g as the planner
+// chart with a signed y axis (for accelerations)
+function schart(c,bx,{xmax,ymax,xlab,ylab}){const{x:L,y:T,w:W,h:H}=bx,sx=v=>L+v/xmax*W,sy=v=>T+H/2-v/ymax*H/2;
+  c.fillStyle='rgba(255,250,240,.6)';c.fillRect(L,T,W,H);c.strokeStyle='rgba(90,60,30,.16)';c.lineWidth=1.5;c.font=`500 19px ${MONO}`;c.fillStyle='#7A6346';
+  const xs=niceStep(xmax),ys=niceStep(ymax);c.beginPath();
+  for(let v=xs;v<=xmax+1e-9;v+=xs){c.moveTo(sx(v),T);c.lineTo(sx(v),T+H)}for(let v=ys;v<=ymax+1e-9;v+=ys)for(const s of[1,-1]){c.moveTo(L,sy(s*v));c.lineTo(L+W,sy(s*v))}c.stroke();
+  c.textAlign='center';c.textBaseline='top';for(let v=0;v<=xmax+1e-9;v+=xs)c.fillText(+v.toFixed(2),sx(v),T+H+8);
+  c.textAlign='right';c.textBaseline='middle';for(let v=-Math.floor(ymax/ys)*ys;v<=ymax+1e-9;v+=ys)c.fillText(+v.toFixed(1),L-10,sy(v));
+  c.strokeStyle=COL.ink;c.lineWidth=3;c.beginPath();c.moveTo(L,T-6);c.lineTo(L,T+H);c.moveTo(L,sy(0));c.lineTo(L+W+6,sy(0));c.stroke();
+  if(xlab)txt(c,xlab,L+W,T+H+56,{size:26,italic:true,align:'right'});
+  c.save();c.translate(L-62,T);c.rotate(-Math.PI/2);txt(c,ylab,0,0,{size:26,italic:true,align:'right'});c.restore();
+  return{sx,sy,bx}}
+// friction circle seen from above: horizontal = sideways, vertical = along the path. f = share of grip used sideways
+function gripCircle(c,cx,cy,R,f){f=clamp(f);const h=R*Math.sqrt(1-f*f),px=cx+f*R;
+  c.save();c.fillStyle='rgba(255,250,240,.75)';c.strokeStyle=COL.ink;c.lineWidth=4;c.beginPath();c.arc(cx,cy,R,0,7);c.fill();c.stroke();
+  c.strokeStyle='rgba(58,42,26,.25)';c.lineWidth=2;c.setLineDash([8,8]);c.beginPath();c.moveTo(cx-R,cy);c.lineTo(cx+R,cy);c.moveTo(cx,cy-R);c.lineTo(cx,cy+R);c.stroke();c.setLineDash([]);
+  drawMouse(c,cx,cy,-Math.PI/2,44);
+  if(f>.03)fatArrow(c,cx,cy,px,cy,22,COL.orange);
+  c.strokeStyle=COL.green;c.fillStyle=COL.green;c.lineCap='round';c.lineWidth=18;
+  if(h>6){c.beginPath();c.moveTo(px,cy-h);c.lineTo(px,cy+h);c.stroke()}else{c.beginPath();c.arc(px,cy,16,0,7);c.fill()}
+  c.restore();
+  txt(c,'↑ speed up',cx,cy-R-24,{size:32,color:COL.green,align:'center'});txt(c,'↓ brake',cx,cy+R+50,{size:32,color:COL.green,align:'center'})}
+const cite=(c,s)=>txt(c,s,1840,945,{size:26,italic:true,color:'#7A6346',align:'right'});
+const ringDot=(c,x,y,col,r=13)=>{c.fillStyle=col;c.strokeStyle='#fff';c.lineWidth=4;c.beginPath();c.arc(x,y,r,0,7);c.fill();c.stroke()};
+
+const SCENES=[
+{ title:'How fast can a mouse turn?', caption:'Micromouse motion planning 🐭', hero:true, builds:1,
+  notes:'Micromouse: a palm-sized robot finds the centre of a maze, then races there. Finding the path is the easy part. Today: how it plans its motion, meaning the shape of every turn and the speed along it. Inspired by Veritasium, "The Fastest Maze-Solving Competition On Earth". Lecture 1: trajectory = path + velocity profile, and that is the structure of this whole talk.',
+  draw(c,{t}){
+    txt(c,'How fast can',110,400,{size:124,color:COL.title});txt(c,'a mouse turn?',110,540,{size:124,color:COL.cap});
+    txt(c,'Micromouse motion planning 🐭',116,640,{size:46,italic:true});
+    txt(c,'Motion Planning · Prof. Zvi Shiller · Ariel University',116,930,{size:30,color:'#7A6346'});
+    const B=mkBoard(1020,150,780,6,6);drawBoard(c,B,RACE_W);cheese(c,B,[3,5]);
+    const s=STRATS[2],slow=.35,per=s.P.T/slow+1.8,tt=Math.min(s.P.T,lp(t,per)*slow),p=poseAt(s.P,tt);
+    strokeS(c,B,s.S,0,p.i,'seg',54*B.sc);mouseAt(c,B,p)}},
+
+{ title:'The challenge', caption:'Search slowly. Then race.', builds:3,
+  notes:'Classic maze: 16 by 16 cells, 18 cm each, goal in the centre. First the search run: the mouse does not know the walls, it senses them as it drives and re-plans every step. That is ONLINE planning (Lecture 1: the task changes during motion, react with sensors). Then the speed run: the map is known, so everything is planned OFFLINE before moving. Numbers here: cells explored by a simulated flood-fill search, and speed-run time from the planner at 1.5 g grip and 4 m/s top speed.',
+  draw(c,{b,bt}){
+    const B=mkBoard(550,135,820,16,16);
+    drawBoard(c,B,BIG,()=>{c.fillStyle='rgba(242,211,58,.38)';c.fillRect(B.X(7*CELL),B.Y(9*CELL),2*CELL*B.sc,2*CELL*B.sc)});
+    emoji(c,'🧀',B.X(8*CELL),B.Y(8*CELL),70);
+    const xb=B.x-46,ya=B.Y(16*CELL),yb=B.Y(15*CELL);c.strokeStyle=COL.ink;c.lineWidth=3;c.beginPath();c.moveTo(xb-10,ya);c.lineTo(xb+10,ya);c.moveTo(xb,ya);c.lineTo(xb,yb);c.moveTo(xb-10,yb);c.lineTo(xb+10,yb);c.stroke();
+    txt(c,'18 cm',xb-20,(ya+yb)/2,{mono:true,size:34,align:'right',base:'middle'});
+    txt(c,'16 × 16',B.x-46,B.y+B.h,{mono:true,size:34,align:'right',color:'#7A6346'});
+    if(b===0)mouseAt(c,B,{x:90,y:90,h:Math.PI/2});
+    if(b>=1){const f=b===1?bt*20:SEARCH.length;cellTrail(c,B,SEARCH,f,COL.teal,30*B.sc+3,b===2?.35:.9);
+      if(b===1)mouseAt(c,B,cellPose(SEARCH,f));
+      txt(c,'🔎 Search',1440,430,{size:60,color:COL.teal});txt(c,`${Math.min(SEARCH.length-1,Math.floor(f))} cells`,1446,490,{mono:true,size:40})}
+    if(b===2){const tt=Math.min(FAST.P.T,bt*.6),p=poseAt(FAST.P,tt);strokeS(c,B,FAST.S,0,p.i,COL.green,44*B.sc+4);mouseAt(c,B,p);
+      txt(c,'⚡ Speed run',1440,640,{size:60,color:COL.green});txt(c,`${tt.toFixed(2)} s`,1446,700,{mono:true,size:40})}}},
+
+{ title:'Flood fill', caption:'Every cell knows its distance to the goal.', builds:2,
+  notes:'This is Dijkstra opened from the goal G with u_G = 0 (Lectures 2 and 3). Each neighbour gets u_j = min(u_k + a_kj), so we get the cost from ALL cells to G, not just from the start. With every edge = 1 it is breadth-first search. Then Bellman: from any cell, step to a neighbour with a smaller number and you are on an optimal path. Click a wall gap to drop or lift a wall: the whole map re-floods instantly, like the mouse discovering a wall. Real mice put estimated TIME on edges (a turn costs more than a straight), which makes it full Dijkstra, and A* can speed it up. Spoken line: a maze is the classic local-minimum trap for potential fields; flood fill has no local minima.',
+  setup(){flFull=false},replay(){FLW=new Set(FL0);flFull=false},
+  draw(c,{b,bt}){
+    const B=mkBoard(560,140,800,8,8);this.B=B;const{D,max}=flood(FLW,8,8,FL_G),wave=(b>0||flFull)?max+1:bt*4,cp=CELL*B.sc;
+    drawBoard(c,B,FLW,()=>{for(let i=0;i<8;i++)for(let j=0;j<8;j++){const d=D[i][j];if(!isFinite(d)||d>wave)continue;const pop=ease((wave-d)*2.5),m=cp*(1-pop)/2+9;
+      c.fillStyle=WAVE[Math.min(WAVE.length-1,Math.floor(d/Math.max(1,max)*(WAVE.length-1)))];c.globalAlpha=.9;c.fillRect(B.X(i*CELL)+m,B.Y((j+1)*CELL)+m,cp-2*m,cp-2*m);c.globalAlpha=1;
+      txt(c,String(d),B.X(i*CELL+90),B.Y(j*CELL+90)+2,{mono:true,size:40*pop,color:'#1B1208',align:'center',base:'middle'})}},true);
+    emoji(c,'🧀',B.X(4*CELL),B.Y(4*CELL),56);
+    if(b===0){mouseAt(c,B,{x:90,y:90,h:Math.PI/2});return}
+    const path=descend(FLW,8,8,D,[0,0]);
+    if(!path){mouseAt(c,B,{x:90,y:90,h:Math.PI/2});emoji(c,'🚧',B.X(90),B.Y(90)-70,64);return}
+    const f=bt*3;cellTrail(c,B,path,f,COL.green,26*B.sc,.75);mouseAt(c,B,cellPose(path,f))},
+  click(sx,sy){const B=this.B;if(!B||sx<B.x-20||sx>B.x+B.w+20||sy<B.y-20||sy>B.y+B.h+20)return false;
+    const mx=(sx-B.x)/B.sc,my=(B.y+B.h-sy)/B.sc;let best=null,bd=60;
+    for(let a=1;a<8;a++)for(let j=0;j<8;j++){const d=Math.hypot(mx-a*CELL,my-(j+.5)*CELL);if(d<bd){bd=d;best=`v${a},${j}`}}
+    for(let i=0;i<8;i++)for(let a=1;a<8;a++){const d=Math.hypot(mx-(i+.5)*CELL,my-a*CELL);if(d<bd){bd=d;best=`h${i},${a}`}}
+    if(best){FLW.has(best)?FLW.delete(best):FLW.add(best);flFull=true}return true}},
+
+{ title:'Shortest is not fastest', caption:'Optimise time, not distance.', builds:2,
+  notes:'Lecture 1: optimal trajectory planning means time or energy, not distance. Same mouse, same grip, same 90 mm turns on both routes. The magenta route has fewer cells but a turn in every cell, so it never gets above the corner speed. The green route is longer but has two long straights where the mouse can accelerate. Times are computed by the speed planner (1.5 g, 4 m/s), played at half speed.',
+  draw(c,{b,bt}){
+    const B=mkBoard(360,180,760,6,6);drawBoard(c,B,SV_W);cheese(c,B,[4,5]);
+    SV.forEach((o,k)=>{const f=b===0?ease(bt/1.1-k*.6):1;strokeS(c,B,o.S,0,Math.floor(f*(o.S.x.length-1)),o.color,(b?18:44)*B.sc,{alpha:b?.45:1})});
+    const best=Math.min(...SV.map(o=>o.P.T));
+    SV.forEach((o,k)=>{const y=400+k*260,tt=b?Math.min(o.P.T,bt*.5):0;
+      drawMouse(c,1300,y-20,0,34,o.color);txt(c,`${o.cells.length} cells`,1370,y,{size:64,color:o.color});
+      txt(c,`${turnCount(o.S)} turns`,1376,y+56,{mono:true,size:30,color:'#7A6346'});
+      txt(c,`${tt.toFixed(2)} s`,1800,y,{mono:true,size:60,align:'right'});
+      if(b&&tt>=o.P.T&&o.P.T===best)emoji(c,'🏆',1840,y-20,52);
+      if(b){const p=poseAt(o.P,tt);strokeS(c,B,o.S,0,p.i,o.color,44*B.sc);mouseAt(c,B,p,o.color)}})}},
+
+{ title:'One corner, three ways', caption:'Bigger radius, higher speed.', builds:4,
+  notes:'The 16:00 moment of the video. One right-hand corner. Stop and spin: brake to zero, rotate in place, accelerate again. Search turn: a 90 mm arc inside the corner cell, used while exploring. Large turn: a 180 mm arc that starts early and cuts the inner corner. Corner speed is v = sqrt(a r): lateral acceleration v squared over r cannot exceed the grip. Each build reveals one, the last build races all three. Played at half speed; times are real planner output at 1.5 g.',
+  draw(c,{b,bt}){
+    C3.forEach((o,k)=>{const B=mkBoard(110+k*600,250,520,4,4);drawBoard(c,B,CORNER_W);
+      if(k>b){mouseAt(c,B,{x:90,y:90,h:Math.PI/2});return}
+      txt(c,o.name,B.x+B.w/2,212,{size:56,color:o.color,align:'center'});
+      const clock=(b===3||k===b)?bt:1e4,tt=Math.min(o.P.T,Math.max(0,clock-.3)*.5),p=poseAt(o.P,tt);
+      strokeS(c,B,o.S,0,o.S.x.length-1,o.color,16*B.sc,{alpha:.35});strokeS(c,B,o.S,0,p.i,o.color,50*B.sc);
+      txt(c,`r = ${o.r} mm`,B.X(420),B.Y(330),{mono:true,size:30,color:o.color,align:'center'});
+      txt(c,`${o.vc.toFixed(2)} m/s`,B.X(420),B.Y(330)+44,{mono:true,size:30,color:'#fff',align:'center'});
+      if(!o.r)emoji(c,'🛑',B.X(420),B.Y(330)-70,48);
+      mouseAt(c,B,p);
+      txt(c,`${tt.toFixed(2)} s`,B.x+B.w/2,850,{mono:true,size:64,align:'center'})})}},
+
+{ title:'Corner lab', caption:'v = √(a·r)', builds:1,
+  notes:'Drag the radius: 0 means stop and spin. Bigger radius means higher corner speed and a shorter time, as long as the arc still fits between the walls. Grip is the total acceleration the tyres allow: about 1 g without a fan; a suction fan adds downforce and pushes it to several g. The clothoid button eases curvature in and out: the sideways force ramps instead of jumping, so the wheels do not slip. Right graph: a pure arc switches sideways force on instantly. All numbers come from the speed planner live.',
+  setup(){const ui=document.getElementById('ui');
+    ui.innerHTML=`<div class="ctl" style="left:110px;top:806px">radius <small>0</small><input id="lr" type="range" min="0" max="270" step="10" value="${LAB.r}" aria-label="turn radius"><small>270</small></div>
+<div class="ctl" style="left:790px;top:806px"><small>no fan</small><input id="la" type="range" min="0.8" max="4" step="0.1" value="${LAB.a}" aria-label="grip"><small>fan</small></div>
+<button class="tog${LAB.clo?' on':''}" id="lc" style="left:1480px;top:796px">🌀 clothoid</button>`;
+    const lr=ui.querySelector('#lr'),la=ui.querySelector('#la'),lc=ui.querySelector('#lc');
+    lr.oninput=()=>{LAB.r=+lr.value;labCompute()};la.oninput=()=>{LAB.a=+la.value;labCompute()};
+    lr.onchange=la.onchange=e=>e.target.blur();
+    lc.onclick=()=>{LAB.clo=!LAB.clo;lc.classList.toggle('on',LAB.clo);labCompute();lc.blur()}},
+  draw(c,{t}){
+    const B=mkBoard(110,170,560,4,4);drawBoard(c,B,CORNER_W);
+    const col=LAB.r===0?COL.orange:LAB.clo?COL.magenta:COL.blue,P=LAB.P,S=LAB.S;
+    const per=P.T/.5+1.2,tt=Math.min(P.T,lp(t,per)*.5),p=poseAt(P,tt);
+    strokeS(c,B,S,0,S.x.length-1,col,16*B.sc,{alpha:.35});strokeS(c,B,S,0,p.i,col,50*B.sc);mouseAt(c,B,p);
+    if(LAB.r)txt(c,`r = ${LAB.r} mm`,B.X(420),B.Y(300),{mono:true,size:34,color:col,align:'center'});else emoji(c,'🛑',B.X(420),B.Y(300),70);
+    txt(c,`√(${LAB.a.toFixed(1)} g × ${LAB.r} mm)`,790,250,{size:60});
+    txt(c,`= ${LAB.vc.toFixed(2)} m/s`,790,350,{mono:true,size:80,color:COL.green});
+    txt(c,`⏱ ${tt.toFixed(2)} s`,1840,350,{mono:true,size:52,align:'right'});
+    const vs=series(P,i=>P.v[i]/1000),ls=series(P,i=>P.v[i]**2*Math.abs(S.k[i])/G),xm=Math.max(.5,P.T*1.02);
+    const c1=chart(c,{x:860,y:420,w:440,h:250},{xmax:xm,ymax:4.4,xlab:'time (s)',ylab:'speed'});
+    plot(c,c1,vs.xs,vs.ys,COL.green,{w:5,fill:true});
+    const c2=chart(c,{x:1400,y:420,w:440,h:250},{xmax:xm,ymax:4.4,xlab:'time (s)',ylab:'sideways g'});
+    plot(c,c2,[0,xm],[LAB.a,LAB.a],'#7A6346',{w:2.5,dash:[10,8]});txt(c,'grip',1838,c2.sy(LAB.a)-10,{mono:true,size:20,color:'#7A6346',align:'right'});
+    plot(c,c2,ls.xs,ls.ys,col,{w:5,fill:true});
+    for(const ch of[c1,c2]){c.strokeStyle=COL.ink;c.lineWidth=2;c.beginPath();c.moveTo(ch.sx(tt),ch.bx.y);c.lineTo(ch.sx(tt),ch.bx.y+ch.bx.h);c.stroke()}}},
+
+{ title:'The turn library', caption:'Pre-tuned moves, stored in memory.', builds:6,
+  notes:'Fast mice do not improvise turns. They store a small library of shapes, each tuned by hand on a real maze: radius, entry and exit offsets, speed. All drawn here from one entry cell. The planner just picks moves from this menu. This is path-velocity decomposition (Lectures 1 and 3): the path pieces are fixed first, the speed comes later. The number under each name is the tightest radius and the corner speed it allows at 1.5 g.',
+  draw(c,{b,bt}){
+    const B=mkBoard(220,185,730,5,5);drawBoard(c,B,LIB_W);
+    fatArrow(c,B.X(450),B.Y(-10),B.X(450),B.Y(70),26,COL.yellow);
+    for(let k=0;k<b;k++)strokeS(c,B,LIB[k].S,0,LIB[k].S.x.length-1,LIB[k].color,30*B.sc,{alpha:.45});
+    const m=LIB[b],per=m.P.T/.5+1.2,tt=Math.min(m.P.T,lp(bt,per)*.5),p=poseAt(m.P,tt);
+    strokeS(c,B,m.S,0,m.S.x.length-1,m.color,50*B.sc);mouseAt(c,B,p);
+    const a=ease(bt*2.5);
+    txt(c,m.name,1110,480+(1-a)*30,{size:112,color:m.color,alpha:a});
+    txt(c,`r ${Math.round(m.rmin)} mm · v ≤ ${(Math.sqrt(1.5*G*m.rmin)/1000).toFixed(2)} m/s`,1116,560,{mono:true,size:34,alpha:a});
+    for(let k=0;k<LIB.length;k++){c.fillStyle=k<=b?LIB[k].color:'rgba(58,42,26,.18)';c.beginPath();c.arc(1130+k*46,640,14,0,7);c.fill()}}},
+
+{ title:'Zigzag vs diagonal', caption:'Cut straight through the posts.', builds:3,
+  notes:'A staircase of cells. Teal: a 90 degree turn in every cell, so the mouse is stuck at the corner speed. Orange: one straight diagonal through the gaps between the posts, about root 2 shorter per step and no turns at all. Lecture 2, C-space: shrink the mouse to a point and grow the posts by half the mouse width; the diagonal only exists if that corridor stays open. On a diagonal the body is rotated, so the real configuration is (x, y, theta), not just (x, y). Race at half speed.',
+  draw(c,{b,bt}){
+    c.save();c.translate(960,560);c.rotate(Math.PI/4);const B={sc:.8,X:m=>(m-720)*.8,Y:m=>-(m-720)*.8};
+    drawMaskBoard(c,B,ZZ,ZZ_W);
+    ZZP.forEach((o,k)=>{if(k>b)return;const f=k===b&&b<2?ease(bt/1.4):1;
+      strokeS(c,B,o.S,0,Math.floor(f*(o.S.x.length-1)),o.color,(b===2?16:40)*B.sc,{alpha:b===2?.45:1})});
+    const tts=ZZP.map(o=>b===2?Math.min(o.P.T,bt*.5):0);
+    if(b===2)ZZP.forEach((o,k)=>{const p=poseAt(o.P,tts[k]);strokeS(c,B,o.S,0,p.i,o.color,40*B.sc);mouseAt(c,B,p,o.color)});
+    else mouseAt(c,B,{x:90,y:90,h:0});
+    c.restore();
+    txt(c,`${turnCount(ZZP[0].S)} turns`,560,300,{size:64,color:COL.teal,align:'center'});
+    if(b>=1)txt(c,'1 diagonal',1360,880,{size:64,color:COL.orange,align:'center'});
+    if(b===2){txt(c,`${tts[0].toFixed(2)} s`,860,300,{mono:true,size:56,align:'center'});txt(c,`${tts[1].toFixed(2)} s`,1080,880,{mono:true,size:56,align:'center'})}}},
+
+{ title:'The command chain', caption:'Compile cells into moves.', builds:2,
+  notes:'The path planner gives a list of cells, which reads as a string of commands: F forward one cell, R turn right, L turn left. Before the speed run that string is compiled into library moves: runs of F become one straight, zigzags become one diagonal, corners become 45, 90 or 135 degree arcs. Fewer, longer moves mean fewer speed changes. Colours: straight lime, diagonal red, 45 blue, 90 orange, 135 magenta.',
+  draw(c,{b,bt}){
+    const B=mkBoard(110,180,760,6,6);drawBoard(c,B,RACE_W);cheese(c,B,[3,5]);const S=STRATS[2].S,cp=CELL*B.sc;
+    const nRaw=b===0?bt*10:RAWC.length,fade=b===1?1-ease(bt*2)*.85:1;
+    RAWC.forEach((r,k)=>{if(k>=nRaw)return;const[x,y]=ctr(r.cell),pop=ease((nRaw-k)*2);glyph(c,B.X(x),B.Y(y),cp*.24*pop,r.L,-r.h,fade);
+      glyph(c,1030+k*51,330,20*pop,r.L,0)});
+    txt(c,`${RAWC.length} commands`,1010,250,{size:52,color:COL.ink});
+    if(b===0)return;
+    const dur=.22,t0=.4;let cx=1010,cy=600;
+    PIECES.forEach((p,k)=>{const f=clamp((bt-t0-k*dur)/dur);if(f<=0)return;arrowPiece(c,B,S,p.a,p.b,f,p.color,cp*.26);
+      c.font=`700 28px ${MONO}`;const w=c.measureText(p.lab).width+44;if(cx+w>1850){cx=1010;cy+=78}
+      c.save();c.globalAlpha=ease(f*1.5);c.fillStyle=p.color;c.beginPath();c.moveTo(cx,cy-28);c.lineTo(cx+w-18,cy-28);c.lineTo(cx+w,cy);c.lineTo(cx+w-18,cy+28);c.lineTo(cx,cy+28);c.closePath();c.fill();
+      c.fillStyle=p.color===COL.lime||p.color===COL.yellow?'#1B1B1B':'#fff';c.textAlign='left';c.textBaseline='middle';c.fillText(p.lab,cx+14,cy+1);c.restore();cx+=w+10});
+    const tDone=t0+PIECES.length*dur+.6;
+    if(bt>tDone)txt(c,`${PIECES.length} moves`,1010,520,{size:52,color:COL.green,alpha:ease((bt-tDone)*3)});
+    if(bt>tDone){const P=STRATS[2].P,per=P.T/.4+1.2,tt=Math.min(P.T,lp(bt-tDone,per)*.4);mouseAt(c,B,poseAt(P,tt))}}},
+
+{ title:'One path, one number', caption:'On a fixed path, the state is just (s, ṡ).', builds:2,
+  notes:'Shiller and Lu (1992), section 2: once the path is fixed, every joint is a function of one parameter, theta = f(S). Substituting into the equations of motion gives m(S) S-ddot + b(S) S-dot squared + G(S) = T, so the 2n-dimensional state space of the robot collapses to a two-state double integrator: x1 = S, x2 = S-dot, and the control is S-ddot (their "reduced problem", Eq. 9). The complexity moves from the dynamics into the bounds on the control. Our mouse is the same: x, y and heading are all fixed by s along the compiled path, so the only freedom left is how fast to go. White dots on the board: every 25 cm of s. Right: the same run drawn in the phase plane (s, s-dot), the state space of Lecture 3. This is path-velocity decomposition (Lectures 1 and 3; Kant and Zucker 1986).',
+  draw(c,{t,b}){
+    const B=mkBoard(90,230,560,6,6);drawBoard(c,B,RACE_W);cheese(c,B,[3,5]);const S=STRATS[2].S,P=STRATS[2].P,sm=PH.smax;
+    strokeS(c,B,S,0,S.x.length-1,'#8C8C8C',14*B.sc,{alpha:.7});
+    const per=P.T/.4+1.2,tt=Math.min(P.T,lp(t,per)*.4),p=poseAt(P,tt);strokeS(c,B,S,0,p.i,COL.green,30*B.sc);
+    for(let k=0;k*.25<=sm;k++){const i=idxAtS(S,k*250),x=B.X(S.x[i]),y=B.Y(S.y[i]);c.fillStyle='#fff';c.beginPath();c.arc(x,y,6,0,7);c.fill();if(k%2===0)txt(c,(k*.25).toFixed(1),x+10,y-10,{mono:true,size:18,color:'#fff'})}
+    mouseAt(c,B,p);
+    const s=S.s[p.i]/1000,v=P.v[p.i]/1000;
+    txt(c,`s = ${s.toFixed(2)} m`,90,900,{mono:true,size:34,color:COL.cap});txt(c,`ṡ = ${v.toFixed(2)} m/s`,650,900,{mono:true,size:34,color:COL.green,align:'right'});
+    txt(c,'x, y, θ = f(s)',820,250,{size:64,color:COL.cap});txt(c,'control: s̈',1840,250,{size:48,color:COL.green,align:'right',alpha:b?1:.35});
+    if(b>=1){const ch=chart(c,{x:880,y:330,w:960,h:520},{xmax:sm,ymax:4.6,xlab:'s (m)',ylab:'ṡ (m/s)'});plot(c,ch,PH.xs,PH.v,COL.green,{w:5,upto:s});ringDot(c,ch.sx(s),ch.sy(v),COL.green)}}},
+
+{ title:'The acceleration window', caption:'Turning eats grip. Less is left to speed up or brake.', builds:2,
+  notes:'At one point of the path, which accelerations are allowed? For a manipulator, Shiller and Lu substitute the actuator limits into the path equation: T_min <= m_i S-ddot + b_i S-dot^2 + G_i <= T_max. Each actuator is a strip in the (S-dot^2, S-ddot) plane and together they make a polygon (their Fig. 1). At the current speed, its bottom and top are S-ddot_d and S-ddot_a, the max deceleration and max acceleration (Eq. 7). Our mouse has one grip limit, the friction circle: (tangential accel)^2 + (sideways accel)^2 <= a^2, with sideways = s-dot^2 / r. Left: as the mouse speeds up in a 180 mm turn, the orange sideways part grows and the green window for speeding up or braking shrinks. Right: the same thing in Shiller and Lu\'s plane. Here the polygon becomes an ellipse. Where it closes, at s-dot^2 = a r, the window is a single point: that is the velocity limit, their "admissible acceleration at velocity limit". Grip 1.5 g as everywhere else.</p><p><b>Derivation (L6 slide 7, L9 slide 28)</b></p><ol>'+
+    '<li><b>Split the acceleration.</b> The path is fixed, so position is p(s). Differentiate twice: <code>p̈ = p_s·s̈ + p_ss·ṡ²</code>, with |p_s| = 1 and |p_ss| = κ = 1/r. So the acceleration has a part <b>along</b> the path, <code>s̈</code>, and a part <b>sideways</b>, <code>κṡ²</code>, which exists even at constant speed.</li>'+
+    '<li><b>Apply the grip limit.</b> Coulomb friction on a flat floor: total tyre force ≤ μmg. Divide by m and write a = μg: <code>s̈² + (κṡ²)² ≤ a²</code>. That is the friction circle on the left.</li>'+
+    '<li><b>Solve for s̈.</b> <code>-√(a² - κ²ṡ⁴) ≤ s̈ ≤ +√(a² - κ²ṡ⁴)</code>. The two ends are S̈d (max brake) and S̈a (max throttle): the green bar.</li>'+
+    '<li><b>Find the velocity limit.</b> The square root needs a² - κ²ṡ⁴ ≥ 0, so <code>ṡ ≤ √(a/κ) = √(a·r)</code>. At that speed the bar shrinks to one point, s̈ = 0.</li>'+
+    '<li><b>Right plot.</b> Step 2 in the (ṡ², s̈) plane is an ellipse with half-axes a/κ and a. It plays the role of the actuator polygon in L6 slides 20-25.</li></ol>'+
+    '<p><b>Check:</b> a = 1.5 g = 14.7 m/s², r = 0.18 m: <code>√(14.7 × 0.18) = 1.63 m/s</code>. The general L9 slide 27 formula gives the same result on flat ground (K_t = K_q = 0, K_r = 1, n_q = 1, n_r = 0).',
+  draw(c,{t,b}){
+    const k=1/.18,vm=Math.sqrt(A_MS/k),ph=(t*.3)%2,u=REDUCE?.85:ease(ph<1?ph:2-ph),v=vm*u,side=v*v*k/A_MS,win=A_MS*Math.sqrt(Math.max(0,1-side*side));
+    gripCircle(c,420,560,250,side);
+    txt(c,'sideways ṡ²/r',420+side*250-26,560+62,{size:30,color:COL.orange,align:'right'});
+    txt(c,`r = 180 mm   ṡ = ${v.toFixed(2)} m/s`,110,230,{mono:true,size:30});
+    if(b>=1){const ch=schart(c,{x:1010,y:200,w:810,h:660},{xmax:3,ymax:18,xlab:'ṡ² (m²/s²)',ylab:'s̈ (m/s²)'}),X=vm*vm,up=[],lo=[];
+      for(let q=0;q<=80;q++){const x=X*q/80,y=Math.sqrt(Math.max(0,A_MS*A_MS-(k*x)**2));up.push([ch.sx(x),ch.sy(y)]);lo.push([ch.sx(x),ch.sy(-y)])}
+      c.save();c.beginPath();up.forEach((p,i)=>i?c.lineTo(p[0],p[1]):c.moveTo(p[0],p[1]));lo.reverse().forEach(p=>c.lineTo(p[0],p[1]));c.closePath();
+      c.fillStyle='rgba(60,195,90,.16)';c.fill();c.strokeStyle=COL.green;c.lineWidth=3;c.stroke();
+      c.strokeStyle='#6E5B45';c.setLineDash([10,8]);c.beginPath();c.moveTo(ch.sx(X),ch.bx.y);c.lineTo(ch.sx(X),ch.bx.y+ch.bx.h);c.stroke();c.restore();
+      txt(c,'ṡ²max',ch.sx(X)+12,ch.bx.y+40,{mono:true,size:24,color:'#6E5B45'});
+      const bx=ch.sx(v*v);c.save();c.strokeStyle=COL.green;c.fillStyle=COL.green;c.lineCap='round';c.lineWidth=14;
+      if(win>.3){c.beginPath();c.moveTo(bx,ch.sy(win));c.lineTo(bx,ch.sy(-win));c.stroke()}else{c.beginPath();c.arc(bx,ch.sy(0),14,0,7);c.fill()}c.restore();
+      txt(c,'S̈a',bx+18,ch.sy(win)+10,{size:38,color:COL.green});txt(c,'S̈d',bx+18,ch.sy(-win)+10,{size:38,color:COL.green});
+      cite(c,'cf. Shiller & Lu, Fig. 1')}}},
+
+{ title:'The velocity limit curve', caption:'Above this curve, no acceleration fits.', builds:1,
+  notes:'Now repeat that window at every point of the path. Where the window closes we get S-dot_max(S), the velocity limit curve (Shiller and Lu, Eq. 8; Pham calls it the MVC, maximum velocity curve). Above it, S-ddot_d > S-ddot_a: no acceleration is admissible, so every real trajectory must stay below. For the mouse: sqrt(a r) in every turn, the motor top speed (4 m/s) on straights, and zero at a stop-and-spin point. Notice the vertical jumps: the curvature jumps where a straight meets an arc, so the limit curve jumps too. Shiller and Lu call that a discontinuity point. A clothoid (corner lab) would ramp the curvature and smooth those cliffs. The cursor on the board shows where on the path we are.',
+  draw(c,{t}){
+    const B=mkBoard(90,230,560,6,6);drawBoard(c,B,RACE_W);cheese(c,B,[3,5]);const S=STRATS[2].S,sm=PH.smax;
+    strokeS(c,B,S,0,S.x.length-1,'#8C8C8C',14*B.sc,{alpha:.7});
+    const ch=chart(c,{x:800,y:180,w:1040,h:680},{xmax:sm,ymax:4.6,xlab:'s, distance along path (m)',ylab:'speed (m/s)'}),u=REDUCE?sm:sm*clamp(t/4);
+    c.save();c.beginPath();c.moveTo(ch.sx(0),ch.sy(4.6));for(let k=0;k<PH.xs.length&&PH.xs[k]<=u;k++)c.lineTo(ch.sx(PH.xs[k]),ch.sy(PH.vl[k]));c.lineTo(ch.sx(u),ch.sy(4.6));c.closePath();c.fillStyle='rgba(233,69,69,.14)';c.fill();c.restore();
+    plot(c,ch,PH.xs,PH.vl,'#6E5B45',{w:4,dash:[12,9],upto:u});
+    const i=idxAtS(S,u*1000),k=Math.min(PH.xs.length-1,PH.idx.findIndex(q=>q>=i)<0?PH.xs.length-1:PH.idx.findIndex(q=>q>=i));
+    c.strokeStyle=COL.ink;c.lineWidth=2;c.beginPath();c.moveTo(ch.sx(u),ch.bx.y);c.lineTo(ch.sx(u),ch.bx.y+ch.bx.h);c.stroke();ringDot(c,ch.sx(u),ch.sy(PH.vl[k]),'#6E5B45');
+    strokeS(c,B,S,0,i,'#6E5B45',22*B.sc);mouseAt(c,B,{x:S.x[i],y:S.y[i],h:S.h[i]});
+    txt(c,'Ṡmax(s)',1830,215,{size:40,color:'#6E5B45',align:'right'});
+    if(u>=sm*.98){const a=REDUCE?1:ease((t-4)*2),R=RUNS[0],xm=(PH.xs[R[0]]+PH.xs[R[1]])/2;
+      txt(c,'✗ no s̈ fits',ch.sx(sm*.5),ch.sy(4.3),{size:32,color:COL.red,align:'center',base:'middle',alpha:a});
+      txt(c,'√(a·r)',ch.sx(xm),ch.sy(PH.vl[R[0]])+46,{mono:true,size:26,color:'#6E5B45',align:'center',alpha:a})}}},
+
+{ title:'Full throttle or full brake', caption:'Accelerate forward. Brake backward. Take the minimum.', builds:3,
+  notes:'The time is T = integral of ds / s-dot, so to be fast we want the curve as high as possible under the limit. Orange: integrate forward from rest at maximum acceleration S-ddot_a, never above the limit. Pink: integrate backward from the goal at maximum deceleration S-ddot_d, braking into every turn. Green: the lower of the two. Bobrow, Dubowsky and Gibson (1985) and Shin and McKay showed the optimal profile is bang-bang; Shiller and Lu proved it with the maximum principle (their Theorem 1): S-ddot* takes the extreme values S-ddot_a or S-ddot_d at every point, EXCEPT at singular points and arcs. Hold that exception for two slides. Pham calls these the beta (max) and alpha (min) profiles. Grip is shared between braking and turning, so the curves bend near each turn.</p><p><b>Derivation (L4 slides 12-14, L6 slides 8-11)</b></p><ol>'+
+    '<li><b>Why bang-bang.</b> State x1 = s, x2 = ṡ, control u = s̈, cost T = ∫1 dt. The Hamiltonian <code>H = 1 + λ1·ṡ + λ2·s̈</code> is linear in s̈, so it is minimised at a bound: s̈ = S̈a when λ2 &lt; 0, s̈ = S̈d when λ2 &gt; 0.</li>'+
+    '<li><b>Integrate in s, not t.</b> <code>s̈ = dṡ/dt = (dṡ/ds)(ds/dt) = ṡ·dṡ/ds</code>, so <code>d(ṡ²)/ds = 2s̈</code>. One step of length ds: <code>ṡ²(s+ds) = ṡ²(s) + 2·s̈·ds</code>.</li>'+
+    '<li><b>Forward pass (orange).</b> Start at ṡ = 0 and step with <code>s̈ = +√(a² - κ²ṡ⁴)</code>, never going above the limit curve.</li>'+
+    '<li><b>Backward pass (pink).</b> Start at the goal and walk toward the start with the same rule. That is full braking, seen in reverse.</li>'+
+    '<li><b>Plan (green) = min of the two.</b> Where they cross is the throttle-to-brake switch.</li>'+
+    '<li><b>Time.</b> <code>T = ∫ ds/ṡ</code>, summed as 2·ds/(ṡ_i + ṡ_(i-1)).</li></ol>'+
+    '<p><b>Worked example:</b> from rest, a 0.36 m straight, then a 90 mm arc. Arc limit: <code>√(14.7 × 0.09) = 1.15 m/s</code>.</p><ol>'+
+    '<li>Forward alone reaches <code>√(2 × 14.7 × 0.36) = 3.25 m/s</code>: far too fast for the arc.</li>'+
+    '<li>Backward from the arc entry, d metres before it: <code>ṡ² = 1.15² + 2 × 14.7 × d</code>.</li>'+
+    '<li>The curves cross where <code>29.4·d1 = 1.32 + 29.4·(0.36 - d1)</code>, so d1 = 0.20 m and the peak is 2.44 m/s.</li>'+
+    '<li>Result: full throttle for 20 cm, full brake for 16 cm, and the mouse enters the turn at exactly 1.15 m/s.</li></ol>'+
+    '<p><b>Same idea for stop and spin:</b> spin at +α for half the angle, then at -α. Rest to rest, that gives <code>t = 2√(θ/α)</code>, the L4 double integrator answer.',
+  draw(c,{b,bt}){
+    const B=mkBoard(90,230,560,6,6);drawBoard(c,B,RACE_W);cheese(c,B,[3,5]);const S=STRATS[2].S,P=STRATS[2].P,sm=PH.smax;
+    strokeS(c,B,S,0,S.x.length-1,'#8C8C8C',14*B.sc,{alpha:.7});
+    const ch=chart(c,{x:800,y:180,w:1040,h:680},{xmax:sm,ymax:4.6,xlab:'s, distance along path (m)',ylab:'speed (m/s)'});
+    plot(c,ch,PH.xs,PH.vl,'#6E5B45',{w:3,dash:[12,9]});txt(c,'Ṡmax(s)',1830,215,{size:34,color:'#6E5B45',align:'right'});
+    const dot=(s,col)=>{const i=idxAtS(S,s*1000);ringDot(c,B.X(S.x[i]),B.Y(S.y[i]),col,14)};
+    {const u=b===0?sm*ease(bt/2.4):Infinity;plot(c,ch,PH.xs,PH.vf,COL.orange,{w:5,upto:u,alpha:b===2?.35:1});txt(c,'S̈a  forward →',1830,260,{size:34,color:COL.orange,align:'right'});if(b===0)dot(Math.min(u,sm),COL.orange)}
+    if(b>=1){const fr=b===1?sm*(1-ease(bt/2.4)):-Infinity;plot(c,ch,PH.xs,PH.vb,COL.pink,{w:5,from:fr,alpha:b===2?.35:1});txt(c,'← backward  S̈d',1830,305,{size:34,color:COL.pink,align:'right'});if(b===1)dot(Math.max(fr,0),COL.pink)}
+    if(b===2){const u=sm*ease(bt/1.6);plot(c,ch,PH.xs,PH.v,COL.green,{w:8,upto:u});txt(c,'min = plan',1830,350,{size:34,color:COL.green,align:'right'});
+      if(bt>1.6){const per=P.T/.4+1,tt=Math.min(P.T,lp(bt-1.6,per)*.4),p=poseAt(P,tt);strokeS(c,B,S,0,p.i,COL.green,30*B.sc);mouseAt(c,B,p);
+        ringDot(c,ch.sx(S.s[p.i]/1000),ch.sy(P.v[p.i]/1000),COL.green)}}
+    cite(c,'Bobrow et al. 1985 · Shiller & Lu 1992, Theorem 1')}},
+
+{ title:'Sinks, sources, switches', caption:'Brake into the limit. Leave it at full throttle.', builds:3,
+  notes:'Zoom on the last turn. Shiller and Lu, Figs. 2 and 3. On the limit curve, compare the trajectory direction with the gradient of h = S-dot - S-dot_max(S). A sink is a point where a trajectory pushes into the limit, so it must arrive braking: the turn entry. A source is where the trajectory leaves the limit: the turn exit, full throttle out. Switches from braking to accelerating happen ON the limit curve, at three kinds of points: tangency, discontinuity and critical. Here it is a discontinuity point: the curvature jumps at the arc entry, so the limit drops like a cliff. Switches from accelerating to braking (purple) happen below the curve, where the forward and backward curves cross. Their algorithm (section 3): integrate forward at max acceleration until hitting the limit, search forward along the limit for the next critical or tangency point, integrate backward at max deceleration until crossing, repeat. Every step has a finite number of integrations, even with singular points.',
+  draw(c,{b,bt}){
+    const Z=ZM,xm=Z.s1-Z.s0,ch=chart(c,{x:240,y:190,w:1580,h:640},{xmax:xm,ymax:4.6,xlab:'s - s₀ (m), last turn',ylab:'ṡ (m/s)'});
+    plot(c,ch,Z.x,Z.vl,'#6E5B45',{w:4,dash:[12,9]});plot(c,ch,Z.x,Z.vf,COL.orange,{w:4,alpha:.35});plot(c,ch,Z.x,Z.vb,COL.pink,{w:4,alpha:.35});
+    plot(c,ch,Z.x,Z.v,COL.green,{w:8,upto:b===0?xm*ease(bt/1.4):Infinity});
+    const R=Z.R,xa=PH.xs[R[0]]-Z.s0,ya=PH.v[R[0]],xb=PH.xs[R[1]]-Z.s0,yb=PH.v[R[1]];
+    if(b>=1){const a=b===1?ease(bt*2):1;c.save();c.globalAlpha=a;plot(c,ch,Z.x,Z.ride.map(v=>isNaN(v)?-1:v),COL.yellow,{w:14,from:xa,upto:xb,alpha:.85});
+      ringDot(c,ch.sx(xa),ch.sy(ya),COL.pink,16);ringDot(c,ch.sx(xb),ch.sy(yb),COL.orange,16);c.restore();
+      txt(c,'sink',ch.sx(xa)-26,ch.sy(ya)+70,{size:52,color:COL.pink,align:'right',alpha:a});txt(c,'source',ch.sx(xb)+26,ch.sy(yb)+70,{size:52,color:COL.orange,alpha:a})}
+    if(b>=2){const a=ease(bt*2);
+      for(const k of Z.sw){const j=Z.ks.indexOf(k);c.save();c.globalAlpha=a;ringDot(c,ch.sx(Z.x[j]),ch.sy(Z.v[j]),COL.purple,15);c.restore();txt(c,'switch',ch.sx(Z.x[j]),ch.sy(Z.v[j])-34,{size:40,color:COL.purple,align:'center',alpha:a})}
+      if(Z.jump>0){const j=Z.jump,x=ch.sx(Z.x[j]);c.save();c.globalAlpha=a;c.strokeStyle=COL.red;c.lineWidth=7;c.lineCap='round';c.beginPath();c.moveTo(x,ch.sy(Z.vl[j-1]));c.lineTo(x,ch.sy(Z.vl[j]));c.stroke();c.restore();
+        txt(c,'discontinuity',x+16,ch.sy(4.25),{size:40,color:COL.red,alpha:a})}}
+    cite(c,'after Shiller & Lu, Figs. 2-3')}},
+
+{ title:'Riding the limit', caption:"Don't chatter. Slide along the curve.", builds:2,
+  notes:'The exception in Theorem 1. Inside a constant-radius turn at the limit speed, all the grip goes sideways: the window from the friction circle is a single point, S-ddot_a = S-ddot_d. Shiller and Lu call a point where the full acceleration range is not feasible a singular point (it breaks the sink or source condition, Eqs. 13-14), and a continuous run of them a singular arc. There the optimal trajectory is neither max acceleration nor max braking: it slides along the velocity limit curve, with S-ddot = S-dot_max times dS-dot_max/dS (Eq. 19), which is zero here because the radius is constant. They prove it with the maximum principle (case iii: the costate lambda2 vanishes on the constraint, so the Hamiltonian is minimised by maximising S-dot). Older algorithms assumed pure bang-bang and imitated this with many tiny switches (red): chattering actuator commands, their Fig. 16. The modified algorithm gives smooth commands (green, their Fig. 15) and a finite number of steps. For a mouse, chattering would mean the wheels alternately slipping and gripping in the middle of the turn. Honest note: in their paper the singularity comes from a joint whose actuator cannot affect the path acceleration; ours comes from the grip limit, but the structure in the phase plane is the same.',
+  draw(c,{b,bt}){
+    gripCircle(c,330,520,200,1);txt(c,'window = one point',330,860,{size:34,color:COL.green,align:'center'});
+    const R=RUNS[RUNS.length-1],a=PH.xs[R[0]]-.08,e=Math.min(PH.smax,PH.xs[R[1]]+.08),xm=e-a,L=PH.v[R[0]],xa=PH.xs[R[0]]-a,xb=PH.xs[R[1]]-a;
+    const ks=[];PH.xs.forEach((x,k)=>{if(x>=a&&x<=e)ks.push(k)});const X=ks.map(k=>PH.xs[k]-a);
+    const ch=chart(c,{x:720,y:180,w:1100,h:400},{xmax:xm,ymax:Math.ceil(L+1),xlab:'',ylab:'ṡ (m/s)'});
+    plot(c,ch,X,ks.map(k=>PH.vl[k]),'#6E5B45',{w:4,dash:[12,9]});plot(c,ch,X,ks.map(k=>PH.v[k]),COL.ink,{w:5,alpha:.45});
+    const per=.035,amp=.3,cx=[],cy=[],ax=[],ay=[];
+    for(let x=xa;x<=xb+1e-9;x+=per/20){const f=((x-xa)/per)%1;cx.push(x);cy.push(L-amp*(1-Math.abs(2*f-1)))}
+    for(let x=xa;x<xb;x+=per){const m=Math.min(xb,x+per/2),n=Math.min(xb,x+per);ax.push(x,m,m,n,n);ay.push(-A_MS,-A_MS,A_MS,A_MS,-A_MS)}
+    const up=b===0?xa+(xb-xa)*ease(bt/2):Infinity;
+    plot(c,ch,cx,cy,COL.red,{w:5,upto:up,alpha:b?.25:1});
+    const st=schart(c,{x:720,y:660,w:1100,h:230},{xmax:xm,ymax:20,xlab:'',ylab:'s̈'});
+    plot(c,st,ax,ay,COL.red,{w:4,upto:up,alpha:b?.25:1});
+    if(b>=1){const g=xa+(xb-xa)*ease(bt/1.5);plot(c,ch,[xa,g],[L,L],COL.green,{w:10});plot(c,st,[xa,g],[0,0],COL.green,{w:8})}
+    txt(c,b?'smooth':'chatter',1810,230,{size:44,color:b?COL.green:COL.red,align:'right'});
+    cite(c,'after Shiller & Lu, Figs. 14-16')}},
+
+{ title:'The race', caption:'Same cells. 3× faster.', builds:2,
+  notes:'Same maze, same cells, same physics (1.5 g grip, 4 m/s top speed). Only the motion plan differs. Stop and spin brakes to zero at every corner. Smooth 90s keep moving but at the search-turn speed. Large turns plus diagonals cut corners, run the zigzag as one diagonal, and spend more time at high speed. Shown at half speed; the timers are real planner times. Lecture 1: optimal means time.',
+  draw(c,{b,bt}){
+    const B=mkBoard(110,180,760,6,6);drawBoard(c,B,RACE_W);cheese(c,B,[3,5]);
+    const tt=STRATS.map(s=>b?Math.min(s.P.T,Math.max(0,bt-.3)*.5):0),best=Math.min(...STRATS.map(s=>s.P.T)),mx=Math.max(...STRATS.map(s=>s.P.T))*1.02;
+    STRATS.forEach((s,k)=>{strokeS(c,B,s.S,0,s.S.x.length-1,s.color,14*B.sc,{alpha:.4})});
+    STRATS.forEach((s,k)=>{const p=poseAt(s.P,tt[k]);strokeS(c,B,s.S,0,p.i,s.color,30*B.sc);mouseAt(c,B,p,s.color);
+      const y=250+k*110;drawMouse(c,1030,y-18,0,30,s.color);txt(c,s.name,1090,y,{size:48,color:s.color});
+      txt(c,`${tt[k].toFixed(2)} s`,1790,y,{mono:true,size:60,align:'right'});if(b&&tt[k]>=s.P.T&&s.P.T===best)emoji(c,'🏆',1840,y-18,48)});
+    txt(c,'🐢 ½ speed',1840,140,{mono:true,size:24,color:'#7A6346',align:'right'});
+    const ch=chart(c,{x:1060,y:590,w:770,h:290},{xmax:mx,ymax:4.4,xlab:'time (s)',ylab:'speed'});
+    STRATS.forEach((s,k)=>{const sr=series(s.P,i=>s.P.v[i]/1000);plot(c,ch,sr.xs,sr.ys,s.color,{w:4,upto:b?tt[k]:-1})})}},
+
+{ title:'The honest limit', caption:'Fast to compute. Near-optimal, not optimal.', builds:2,
+  notes:'Everything we did is path-velocity decomposition: fix the path first (turn library), then find the fastest speed along it. Fast enough to run on a tiny microcontroller, but not truly time-optimal: the best trajectory might bend the path differently to allow a better speed profile, and that needs path and speed optimised together. Second click shows who answered this. Left: the speed-along-a-path machinery, Bobrow et al. 1985 and Shiller and Lu 1992 (robust at singular points, which is what makes the time a reliable cost). Right: Shiller and Dubowsky 1989 used exactly that motion time as the cost function and optimised the path itself around obstacles. Pham et al. 2016 (Admissible Velocity Propagation, and Pham thanks Prof. Shiller in the acknowledgments) keep the decomposition but carry the whole INTERVAL of reachable speeds along every path piece inside an RRT, so the path search knows about dynamics. For a mouse that would mean: each library move carries the range of exit speeds it allows, and the planner drops moves that cannot be entered fast enough. Also our model is simplified: point mass, one grip number, perfect tracking. Real mice fight motor torque curves, wheel slip, sensor noise and wall corrections, which is why top teams tune each library turn by hand.',
+  draw(c,{t,b,bt}){
+    if(b===1){const a=ease(bt*2);
+      txt(c,'Bobrow et al. 1985  ·  Shiller & Lu 1992',510,820,{size:36,color:COL.cap,align:'center',alpha:a});
+      txt(c,'Shiller & Dubowsky 1989  ·  Pham et al. 2016',1420,820,{size:36,color:COL.magenta,align:'center',alpha:a})}
+    txt(c,'Path, then speed',100,225,{size:58,color:COL.cap});txt(c,'Both at once',1010,225,{size:58,color:COL.magenta});
+    c.save();c.strokeStyle='rgba(58,42,26,.35)';c.lineWidth=3;c.setLineDash([10,12]);c.beginPath();c.moveTo(960,170);c.lineTo(960,900);c.stroke();c.restore();
+    const B1=mkBoard(100,300,400,4,4),L=C3[2];drawBoard(c,B1,CORNER_W);strokeS(c,B1,L.S,0,L.S.x.length-1,COL.green,44*B1.sc);
+    fatArrow(c,530,500,610,500,22,COL.yellow);
+    const ch1=chart(c,{x:640,y:330,w:280,h:330},{xmax:L.P.T*1.02,ymax:4.4,xlab:'t',ylab:'v'});const s1=series(L.P,i=>L.P.v[i]/1000);plot(c,ch1,s1.xs,s1.ys,COL.green,{w:5,fill:true});
+    const r=60+150*(.5+.5*Math.sin(t*1.3)),S2=buildPath(turnPoly(CORNER),()=>r),P2=topp(S2,1.5,4);
+    const B2=mkBoard(1010,300,400,4,4);drawBoard(c,B2,CORNER_W);
+    for(const g of[60,135,210])strokeS(c,B2,buildPath(turnPoly(CORNER),()=>g),0,1e9,COL.magenta,12*B2.sc,{alpha:.25});
+    strokeS(c,B2,S2,0,S2.x.length-1,COL.magenta,44*B2.sc);
+    fatArrow(c,1440,480,1520,480,18,COL.magenta);fatArrow(c,1520,525,1440,525,18,COL.magenta);
+    const ch2=chart(c,{x:1550,y:330,w:280,h:330},{xmax:L.P.T*1.6,ymax:4.4,xlab:'t',ylab:'v'});const s2=series(P2,i=>P2.v[i]/1000);plot(c,ch2,s2.xs,s2.ys,COL.magenta,{w:5,fill:true});
+    txt(c,'?',B2.x+B2.w/2,B2.y+B2.h/2+10,{size:300,color:COL.yellow,align:'center',base:'middle',alpha:.92})}}
+];
+
+/* ======================= deck ======================= */
+const cv=document.getElementById('cv'),ctx=cv.getContext('2d'),ui=document.getElementById('ui'),notesEl=document.getElementById('notes');
+let VW,VH,SC,OX,OY,DPR,ERR='';
+const st={si:0,b:0,t0:0,b0:0};
+function resize(){DPR=window.devicePixelRatio||1;VW=innerWidth;VH=innerHeight;cv.width=Math.round(VW*DPR);cv.height=Math.round(VH*DPR);
+  SC=Math.min(VW/1920,VH/1080);OX=(VW-1920*SC)/2;OY=(VH-1080*SC)/2;ui.style.transform=`translate(${OX}px,${OY}px) scale(${SC})`}
+addEventListener('resize',resize);resize();
+const NOISE=(()=>{const n=document.createElement('canvas');n.width=n.height=256;const x=n.getContext('2d'),R=rng(3);
+  for(let i=0;i<6000;i++){x.fillStyle=R()<.5?'rgba(120,85,40,.07)':'rgba(255,255,255,.1)';x.fillRect(R()*256,R()*256,1+R()*2,1+R()*2)}return ctx.createPattern(n,'repeat')})();
+function go(i,b=0,done=false){const now=performance.now();ui.innerHTML='';st.si=clamp(i,0,SCENES.length-1);const s=SCENES[st.si];st.b=clamp(b,0,s.builds-1);
+  st.t0=st.b0=done?now-1e5:now;if(s.setup)s.setup();
+  notesEl.innerHTML=`<h3>${st.si+1}. ${s.title}</h3><p>${s.notes||''}</p>`;history.replaceState(null,'',`${location.search}#${st.si+1}.${st.b+1}`)}
+function next(){const s=SCENES[st.si];if(st.b<s.builds-1){st.b++;st.b0=performance.now();history.replaceState(null,'',`${location.search}#${st.si+1}.${st.b+1}`)}else if(st.si<SCENES.length-1)go(st.si+1)}
+function prev(){if(st.b>0){st.b--;st.b0=performance.now()}else if(st.si>0){go(st.si-1,SCENES[st.si-1].builds-1,true)}}
+addEventListener('keydown',e=>{if(e.target.tagName==='INPUT')return;const k=e.key;
+  if(k==='ArrowRight'||k===' '||k==='PageDown'||k==='Enter'){e.preventDefault();next()}
+  else if(k==='ArrowLeft'||k==='PageUp'||k==='Backspace'){e.preventDefault();prev()}
+  else if(k==='r'||k==='R'){const s=SCENES[st.si];if(s.replay)s.replay();st.t0=st.b0=performance.now()}
+  else if(k==='n'||k==='N')notesEl.classList.toggle('on');
+  else if(k==='f'||k==='F'){document.fullscreenElement?document.exitFullscreen():document.documentElement.requestFullscreen().catch(()=>{})}
+  else if(k==='Home')go(0);else if(k==='End')go(SCENES.length-1)});
+cv.addEventListener('click',e=>{const sx=(e.clientX-OX)/SC,sy=(e.clientY-OY)/SC,s=SCENES[st.si];if(s.click&&s.click(sx,sy))return;next()});
+addEventListener('error',e=>{ERR=e.message});
+
+function chrome(s){
+  if(!s.hero){txt(ctx,s.title,90,112,{size:72,color:COL.title});txt(ctx,s.caption,960,1012,{size:46,italic:true,color:COL.cap,align:'center'})}
+  const n=SCENES.length,x0=960-(n-1)*13;
+  for(let i=0;i<n;i++){ctx.beginPath();ctx.arc(x0+i*26,1054,i===st.si?8:6,0,7);
+    if(i===st.si){ctx.fillStyle=COL.title;ctx.fill()}else if(i<st.si){ctx.fillStyle='rgba(58,42,26,.45)';ctx.fill()}else{ctx.strokeStyle='rgba(58,42,26,.45)';ctx.lineWidth=2;ctx.stroke()}}
+  if(s.builds>1)for(let i=0;i<s.builds;i++){ctx.fillStyle=i<=st.b?COL.title:'rgba(58,42,26,.2)';ctx.fillRect(1830+i*14-s.builds*14,1048,10,10)}
+  if(ERR)txt(ctx,'⚠ '+ERR,20,1070,{mono:true,size:16,color:'#B00'})}
+function frame(now){
+  const s=SCENES[st.si],t=REDUCE?1e4:(now-st.t0)/1000,bt=REDUCE?1e4:(now-st.b0)/1000;
+  ctx.setTransform(DPR,0,0,DPR,0,0);ctx.fillStyle='#C9B48F';ctx.fillRect(0,0,VW,VH);
+  ctx.setTransform(DPR*SC,0,0,DPR*SC,DPR*OX,DPR*OY);
+  ctx.save();ctx.beginPath();ctx.rect(0,0,1920,1080);ctx.clip();
+  ctx.fillStyle=COL.paper;ctx.fillRect(0,0,1920,1080);ctx.fillStyle=NOISE;ctx.fillRect(0,0,1920,1080);
+  const vg=ctx.createRadialGradient(960,540,350,960,540,1150);vg.addColorStop(0,'rgba(120,80,30,0)');vg.addColorStop(1,'rgba(120,80,30,.3)');ctx.fillStyle=vg;ctx.fillRect(0,0,1920,1080);
+  try{ctx.save();s.draw(ctx,{t,b:st.b,bt});ctx.restore()}catch(e){ctx.restore();ERR=e.message}
+  chrome(s);ctx.restore();requestAnimationFrame(frame)}
+{const m=location.hash.match(/^#(\d+)(?:\.(\d+))?/);go(m?+m[1]-1:0,m&&m[2]?+m[2]-1:0)}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
