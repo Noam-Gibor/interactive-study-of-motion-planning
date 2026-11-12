@@ -338,6 +338,53 @@ const ZM=(()=>{const R=RUNS[RUNS.length-1],s0=Math.max(0,PH.xs[R[0]]-.45),s1=Mat
   PH.xs.forEach((x,k)=>{if(x>=s0&&x<=s1)ks.push(k)});const g=a=>ks.map(k=>a[k]);
   const o={R,s0,s1,ks,x:ks.map(k=>PH.xs[k]-s0),vl:g(PH.vl),vf:g(PH.vf),vb:g(PH.vb),v:g(PH.v),ride:g(PH.ride),sw:PH.sw.filter(k=>k>=ks[0]&&k<=ks[ks.length-1])};
   o.jump=o.vl.findLastIndex((v,j)=>j>0&&o.vl[j-1]>3.9&&v<3.9&&o.x[j]<=PH.xs[R[0]]-s0+.02);return o})();
+// 10b: B-spline speed plan. b(s) = v^2 is a clamped cubic B-spline over s; its n+1 control points are the variables.
+// Convex hull: c_i <= min vlim^2 over the support of N_i keeps b <= vlim^2 everywhere.
+// b' is a quadratic B-spline with coefficients 3(c[i+1]-c[i])/(t[i+4]-t[i+1]), and a = b'/2, so |a| <= A bounds neighbour steps.
+// T = integral ds/sqrt(b) falls as any c_i rises, so the optimum is the largest feasible c: a forward + backward pass over control points.
+// The friction circle is not linear in c, so it is enforced by an outer loop: re-solve with tighter step limits where it is exceeded.
+// shortcut: that loop is a heuristic (feasible, not proven optimal); a convex solver (SOCP on b) would give the exact optimum.
+function bsplinePlan(S,n,Ag,Vms){
+  const A=Ag*G,V=Vms*1000,N=S.x.length,L=S.s[N-1],h=L/(n-2),t=[];
+  for(let j=0;j<=n+4;j++)t.push(clamp((j-3)*h,0,L));
+  const vl2=S.k.map(k=>{const a=Math.abs(k),v=a>1e-9?Math.min(V,Math.sqrt(A/a)):V;return v*v});
+  const c=[];for(let i=0;i<=n;i++){let m=Infinity;for(let q=0;q<N;q++)if(S.s[q]>=t[i]-1e-9&&S.s[q]<=t[i+4]+1e-9)m=Math.min(m,vl2[q]);c.push(m)}
+  const cap=c.slice(),fac=new Float64Array(n).fill(1),b=new Float64Array(N),acc=new Float64Array(N);let iters=0;
+  for(;iters<40;iters++){
+    for(let i=0;i<=n;i++)c[i]=cap[i];c[0]=0;
+    const D=i=>fac[i]*2*A*(t[i+4]-t[i+1])/3;
+    for(let i=1;i<=n;i++)c[i]=Math.min(c[i],c[i-1]+D(i-1));
+    for(let i=n-1;i>=0;i--)c[i]=Math.min(c[i],c[i+1]+D(i));
+    for(let q=0;q<N;q++){const x=S.s[q];let k=3;while(k<n&&x>=t[k+1])k++;const d=[c[k-3],c[k-2],c[k-1],c[k]];
+      for(let r=1;r<=3;r++)for(let j=3;j>=r;j--){const i=k-3+j,den=t[i+4-r]-t[i],al=den>0?(x-t[i])/den:0;d[j]=(1-al)*d[j-1]+al*d[j]}
+      b[q]=Math.max(0,d[3])}
+    for(let q=0;q<N-1;q++){const ds=S.s[q+1]-S.s[q];acc[q]=ds>0?(b[q+1]-b[q])/(2*ds):(q?acc[q-1]:0)}acc[N-1]=acc[N-2];
+    // friction circle: where sideways + along-path grip exceeds a, tighten the step limit of every pair whose slope shapes that spot
+    let ok=true;for(let q=0;q<N;q++){if(Math.hypot(acc[q],b[q]*Math.abs(S.k[q]))<=A*1.005)continue;ok=false;
+      for(let i=0;i<n;i++)if(S.s[q]>=t[i+1]&&S.s[q]<=t[i+4])fac[i]=Math.min(fac[i],.85*fac[i])}
+    if(ok)break}
+  const v=b.map(Math.sqrt),tA=new Float64Array(N);
+  for(let q=1;q<N;q++){const ds=S.s[q]-S.s[q-1],vs=v[q]+v[q-1];tA[q]=tA[q-1]+(vs>1e-9?2*ds/vs:0)}
+  let jerk=0,peakG=0;for(let q=0;q<N-1;q++){const dt=tA[q+1]-tA[q];if(dt>1e-6)jerk=Math.max(jerk,Math.abs(acc[q+1]-acc[q])/dt);peakG=Math.max(peakG,Math.hypot(acc[q],b[q]*Math.abs(S.k[q]))/G)}
+  const P={v,tA,tD:tA,T:tA[N-1],S,c,gx:c.map((_,i)=>(t[i+1]+t[i+2]+t[i+3])/3),jerk:jerk/1000,peakG,iters};
+  const st=Math.max(1,Math.floor(N/700));P.ph={xs:[],v:[]};for(let q=0;q<N;q+=st){P.ph.xs.push(S.s[q]/1000);P.ph.v.push(v[q]/1000)}
+  P.accS=accSeries(P);return P}
+function accSeries(P){const S=P.S,n=S.x.length,st=Math.max(1,Math.floor(n/700)),xs=[],ys=[];
+  for(let i=0;i<n-1;i+=st){const ds=S.s[i+1]-S.s[i];if(ds<=0)continue;xs.push(P.tA[i]);ys.push((P.v[i+1]**2-P.v[i]**2)/(2*ds)/1000)}return{xs,ys}}
+const ACC0=accSeries(STRATS[2].P),JUMPS=ACC0.xs.filter((x,i)=>i&&Math.abs(ACC0.ys[i]-ACC0.ys[i-1])>8);
+const BS1=bsplinePlan(STRATS[2].S,24,1.5,4),LABB={n:24,P:BS1};
+function bsDraw(c,P,{pts=Infinity,upto=1,dim=false}={}){
+  const sm=PH.smax,tm=Math.max(STRATS[2].P.T,P.T)*1.02;
+  const ch=chart(c,{x:800,y:170,w:1040,h:400},{xmax:sm,ymax:5.4,xlab:'s, distance along path (m)',ylab:'speed (m/s)'});
+  plot(c,ch,PH.xs,PH.vl,'#6E5B45',{w:3,dash:[12,9]});plot(c,ch,PH.xs,PH.v,COL.green,{w:5,alpha:dim?.4:1});
+  const k=Math.min(P.c.length,Math.ceil(pts)),px=i=>ch.sx(P.gx[i]/1000),py=i=>ch.sy(Math.sqrt(P.c[i])/1000);
+  if(k>0){c.save();c.strokeStyle=COL.purple;c.globalAlpha=.5;c.lineWidth=2;c.setLineDash([6,6]);c.beginPath();for(let i=0;i<k;i++)i?c.lineTo(px(i),py(i)):c.moveTo(px(i),py(i));c.stroke();c.restore();
+    for(let i=0;i<k;i++){const r=9*ease((pts-i)*2.5);c.fillStyle=COL.purple;c.strokeStyle='#fff';c.lineWidth=3;c.beginPath();c.arc(px(i),py(i),r,0,7);c.fill();c.stroke()}}
+  if(upto>0)plot(c,ch,P.ph.xs,P.ph.v,COL.purple,{w:6,upto:sm*upto});
+  const ca=schart(c,{x:800,y:665,w:1040,h:185},{xmax:tm,ymax:20,xlab:'time (s)',ylab:'s̈ (m/s²)'});
+  plot(c,ca,ACC0.xs,ACC0.ys,COL.green,{w:3.5,alpha:dim?.4:1});
+  if(upto>0)plot(c,ca,P.accS.xs,P.accS.ys,COL.purple,{w:5,upto:tm*upto});
+  return{ch,ca}}
 const A_MS=1.5*G/1000; // grip in m/s^2, same 1.5 g as the planner
 // chart with a signed y axis (for accelerations)
 function schart(c,bx,{xmax,ymax,xlab,ylab}){const{x:L,y:T,w:W,h:H}=bx,sx=v=>L+v/xmax*W,sy=v=>T+H/2-v/ymax*H/2;
@@ -623,6 +670,43 @@ const SCENES=[
     if(b>=1){const g=xa+(xb-xa)*ease(bt/1.5);plot(c,ch,[xa,g],[L,L],COL.green,{w:10});plot(c,st,[xa,g],[0,0],COL.green,{w:8})}
     txt(c,b?'smooth':'chatter',1810,230,{size:44,color:b?COL.green:COL.red,align:'right'});
     cite(c,'after Shiller & Lu, Figs. 14-16')}},
+
+{ title:'Smooth it with a B-spline', caption:'Control points under the limit keep the curve under.', builds:3,
+  notes:'Bang-bang is time-optimal, but s-ddot jumps between full throttle, zero and full brake (red lines). A jump in acceleration is infinite jerk: the motors cannot follow it, the wheels slip and the mouse loses its line. Fix: write the speed plan as a cubic B-spline and optimise its control points. We keep the same velocity limit curve and the same 1.5 g friction circle; only the shape of the profile changes. First click: the control points, all under Ṡmax(s). Second click: the spline they define, and the two mice racing.</p><p><b>Derivation</b></p><ol>'+
+    '<li><b>Variable.</b> Plan b(s) = ṡ² instead of ṡ, because <code>d(ṡ²)/ds = 2s̈</code> makes the acceleration linear in b. Write <code>b(s) = Σ cᵢ Nᵢ(s)</code>, a clamped cubic B-spline with uniform knots; the unknowns are the control points cᵢ.</li>'+
+    '<li><b>Convex hull.</b> Each Nᵢ ≥ 0, they sum to 1, and Nᵢ is nonzero only on [tᵢ, tᵢ₊₄]. So if <code>cᵢ ≤ min Ṡmax² over [tᵢ, tᵢ₊₄]</code> for every i, then b(s) ≤ Ṡmax²(s) everywhere. An infinite number of constraints becomes one per control point.</li>'+
+    '<li><b>Derivative.</b> b′ is a quadratic B-spline with coefficients <code>dᵢ = 3(cᵢ₊₁ - cᵢ)/(tᵢ₊₄ - tᵢ₊₁)</code>. Since s̈ = b′/2, the bound |s̈| ≤ a becomes <code>|cᵢ₊₁ - cᵢ| ≤ 2a(tᵢ₊₄ - tᵢ₊₁)/3</code>: neighbours may only differ so much.</li>'+
+    '<li><b>Objective.</b> <code>T = ∫ ds/√b</code> gets shorter whenever any cᵢ goes up, and the constraints above are all upper bounds. So the optimum is simply the highest feasible control points: a forward pass and a backward pass over about 25 numbers, the same idea as the orange and pink curves.</li>'+
+    '<li><b>Friction circle.</b> <code>s̈² + (κb)² ≤ a²</code> is not linear in c. It is enforced by an outer loop: wherever it is exceeded, tighten the step limit of the pairs whose slope shapes that spot and solve again (a few iterations). Honest note: this loop is a heuristic; a convex solver on b (second-order cone, as in Verscheure et al. 2009) would give the exact optimum.</li>'+
+    '<li><b>Smoothness.</b> A cubic spline is C², so b′ and therefore s̈ are continuous: finite jerk, no chatter, by construction.</li></ol>'+
+    '<p><b>Related work:</b> B-spline time-jerk optimal planning (Gasparetto and Zanotto 2007); convex time-optimal path tracking in b = ṡ² (Verscheure et al. 2009); the velocity limit curve from Shiller and Lu 1992.',
+  draw(c,{b,bt}){
+    const S=STRATS[2].S,P0=STRATS[2].P,P=BS1,B=mkBoard(90,230,520,6,6);drawBoard(c,B,RACE_W);cheese(c,B,[3,5]);
+    strokeS(c,B,S,0,S.x.length-1,'#8C8C8C',14*B.sc,{alpha:.7});
+    const{ca}=bsDraw(c,P,{pts:b===0?-1:b===1?bt*14:Infinity,upto:b<2?0:ease(bt/1.5),dim:b>0});
+    txt(c,'Ṡmax(s)',830,215,{size:34,color:'#6E5B45'});txt(c,`bang-bang ${P0.T.toFixed(2)} s`,1060,215,{size:34,color:COL.green});
+    if(b>=1)txt(c,b===2?`B-spline ${P.T.toFixed(2)} s`:`${P.c.length} control points`,1830,215,{size:34,color:COL.purple,align:'right'});
+    if(b===0&&JUMPS.length){c.save();c.strokeStyle=COL.red;c.globalAlpha=.7;c.lineWidth=3;for(const x of JUMPS){c.beginPath();c.moveTo(ca.sx(x),ca.bx.y);c.lineTo(ca.sx(x),ca.bx.y+ca.bx.h);c.stroke()}c.restore();
+      txt(c,'jerk = ∞',800,648,{mono:true,size:30,color:COL.red})}
+    if(b===2&&bt>1.6){const per=Math.max(P0.T,P.T)/.4+1,ck=lp(bt-1.6,per)*.4;
+      [[P0,COL.green],[P,COL.purple]].forEach(([Q,col],k)=>{const tt=Math.min(Q.T,ck),p=poseAt(Q,tt);mouseAt(c,B,p,col);
+        drawMouse(c,130,850+k*60,0,24,col);txt(c,`${tt.toFixed(2)} s`,180,862+k*60,{mono:true,size:40,color:col})})}
+    cite(c,'cf. Gasparetto & Zanotto 2007 · Verscheure et al. 2009')}},
+
+{ title:'Smooth or fast?', caption:'Fewer control points: smoother. More: faster.', builds:1,
+  notes:'Same B-spline planner, live; drag the slider. It sets how many control points the plan gets. Few points: each one reaches over a long stretch of path, so it must stay under the LOWEST part of Ṡmax along that stretch, and neighbours are far apart in s, so the acceleration changes slowly. Result: very smooth (low jerk) but slow. Many points: the spline can hug the limit curve and the time approaches the bang-bang optimum (1.24 s), but the acceleration changes over short distances, so jerk grows. Rough rule: peak jerk scales like speed times a divided by the knot spacing. The designer picks the knot spacing the motors and tyres can actually follow, and pays a few percent of time for it. Every number on screen is computed live, with the 1.5 g friction circle respected at every point.',
+  setup(){const ui=document.getElementById('ui');
+    ui.innerHTML=`<div class="ctl" style="left:90px;top:896px"><small>smooth</small><input id="bn" type="range" min="6" max="70" step="1" value="${LABB.n}" aria-label="number of control points"><small>fast</small></div>`;
+    const bn=ui.querySelector('#bn');bn.oninput=()=>{LABB.n=+bn.value;LABB.P=bsplinePlan(STRATS[2].S,LABB.n,1.5,4)};bn.onchange=()=>bn.blur()},
+  draw(c,{t}){
+    const P=LABB.P,P0=STRATS[2].P,S=P.S,B=mkBoard(110,190,430,6,6);drawBoard(c,B,RACE_W);cheese(c,B,[3,5]);
+    const per=P.T/.4+1,tt=Math.min(P.T,lp(t,per)*.4),p=poseAt(P,tt);strokeS(c,B,S,0,S.x.length-1,'#8C8C8C',14*B.sc,{alpha:.7});strokeS(c,B,S,0,p.i,COL.purple,30*B.sc);mouseAt(c,B,p,COL.purple);
+    bsDraw(c,P,{dim:true});
+    txt(c,'Ṡmax(s)',830,215,{size:34,color:'#6E5B45'});txt(c,`bang-bang ${P0.T.toFixed(2)} s`,1060,215,{size:34,color:COL.green});
+    txt(c,`B-spline · ${P.c.length} points`,1830,215,{size:34,color:COL.purple,align:'right'});
+    txt(c,`${P.T.toFixed(2)} s`,90,730,{mono:true,size:76,color:COL.purple});
+    txt(c,`+${((P.T/P0.T-1)*100).toFixed(1)}% time`,94,790,{mono:true,size:32});
+    txt(c,`jerk ≤ ${Math.round(P.jerk)} m/s³`,94,840,{mono:true,size:32})}},
 
 { title:'The race', caption:'Same cells. 3× faster.', builds:2,
   notes:'Same maze, same cells, same physics (1.5 g grip, 4 m/s top speed). Only the motion plan differs. Stop and spin brakes to zero at every corner. Smooth 90s keep moving but at the search-turn speed. Large turns plus diagonals cut corners, run the zigzag as one diagonal, and spend more time at high speed. Shown at half speed; the timers are real planner times. Lecture 1: optimal means time.',
