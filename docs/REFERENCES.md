@@ -1,6 +1,6 @@
 # References
 
-Grouped by how the talk uses them. Each entry lists the scenes that rely on it. [SG91] was checked against the paper itself; the other volume and page numbers were compiled by hand, so check them against the publisher before citing. The search links open Google Scholar on the exact title. BibTeX for all entries: [`references.bib`](references.bib).
+Grouped by how the scenes use them. Each entry lists the scenes that rely on it. [SG91] was checked against the paper itself; the other volume and page numbers were compiled by hand, so check them against the publisher before citing. The search links open Google Scholar on the exact title. BibTeX for all entries: [`references.bib`](references.bib).
 
 ## Prof. Zvi Shiller
 
@@ -64,4 +64,4 @@ Grouped by how the talk uses them. Each entry lists the scenes that rely on it. 
 
 ## Course material
 
-Motion Planning lectures L1-L9, Prof. Zvi Shiller, Ariel University (not public). The speaker notes point to specific slides, for example the friction-circle derivation (L6 slide 7, L9 slide 28) and the bang-bang argument (L4 slides 12-14, L6 slides 8-11).
+Motion Planning lectures L1-L9, Prof. Zvi Shiller, Ariel University (not public). The scene notes point to specific slides, for example the friction-circle derivation (L6 slide 7, L9 slide 28) and the bang-bang argument (L4 slides 12-14, L6 slides 8-11).

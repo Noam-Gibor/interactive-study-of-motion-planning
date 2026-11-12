@@ -1,6 +1,6 @@
 # Iterations
 
-How the talk got from a text-heavy web page to a 20-scene animated deck. Every version that still exists is here, and git tags `v2` to `v6` mark them in the history.
+How the project got from a text-heavy web page to a 23-scene interactive tool. Every version that still exists is here, and git tags `v2` to `v7` mark them in the history.
 
 | Version | What it was | Files |
 |---|---|---|

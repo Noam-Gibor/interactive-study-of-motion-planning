@@ -1,12 +1,14 @@
-# How fast can a mouse turn?
+# Interactive study of motion planning
 
-**Micromouse motion planning, explained with moving pictures.**
-An interactive talk for the *Motion Planning* course of **Prof. Zvi Shiller**, Mechanical Engineering and Mechatronics, Ariel University.
+**A tool to see and learn motion planning concepts, one animated scene at a time.**
+Made while studying the *Motion Planning* course of **Prof. Zvi Shiller**, Mechanical Engineering and Mechatronics, Ariel University.
 By Noam Gibor.
 
-![Title scene: a mouse runs the race maze, its trail coloured by move type](docs/screenshots/scene-01.jpg)
+![Title scene: a robot runs a maze, its trail coloured by move type](docs/screenshots/scene-01.jpg)
 
-A micromouse is a palm-sized robot that finds the centre of a maze and then races there in about a second. Finding the path is the easy part. This talk is about the hard part: **what shape every turn should have, and how fast the mouse may go along it.** It walks from flood fill and turn libraries to the phase-plane view of time-optimal motion along a path, following Shiller and Lu (1992). It then smooths the speed profile and the path with B-splines, and ends by optimising the B-spline path with the motion time as the cost, following Shiller and Gwo (1991).
+Every idea is shown as a picture that moves and is computed live, not as a formula on a slide: graph search, C-space, the velocity limit curve, bang-bang speed profiles, singular arcs, B-spline smoothing, and path optimisation with the motion time as the cost. The running example is a small maze robot (a micromouse), because a maze makes every concept easy to see: the grid is the world, the walls are the obstacles, and every turn is a speed limit.
+
+The scenes go from flood fill and turn libraries to the phase-plane view of time-optimal motion along a path, following Shiller and Lu (1992). They then smooth the speed profile and the path with B-splines, and end by optimising the B-spline path with the motion time as the cost, following Shiller and Gwo (1991).
 
 ## Run it
 
@@ -17,14 +19,14 @@ Open [`index.html`](index.html) in a browser. It is one self-contained file (van
 | `→` `Space` click | next build, then next scene |
 | `←` | previous build or scene |
 | `R` | replay the current scene |
-| `N` | speaker notes, with derivations and course links |
+| `N` | notes: the explanation, derivations and course links for the scene |
 | `F` | fullscreen |
 | `#7.3` in the URL | open scene 7 at build 3 |
 | `?final` in the URL | show every animation at its last frame (also used for `prefers-reduced-motion`) |
 
-Fonts come from Google Fonts. Offline, the deck falls back to Georgia and Consolas, so open it once with internet before presenting.
+Fonts come from Google Fonts. Offline, the deck falls back to Georgia and Consolas, so open it once with internet first.
 
-## The whole talk on one page
+## All scenes on one page
 
 ![All 23 scenes](docs/screenshots/scene-sheet.jpg)
 
@@ -119,7 +121,7 @@ The project went through seven versions, from a text-heavy web page to the curre
 ## Repository layout
 
 ```
-index.html               the talk (current version, v7)
+index.html               the tool (current version, v7)
 context/CLAUDE.md        design brief: storyboard, visual language, physics, course mapping
 context/reference_v2.html  v2, the earlier text-heavy page whose physics code was reused
 iterations/              snapshots and screenshots of every version
