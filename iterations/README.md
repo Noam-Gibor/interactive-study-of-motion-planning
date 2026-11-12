@@ -9,7 +9,8 @@ How the talk got from a text-heavy web page to a 20-scene animated deck. Every v
 | v3 | First scene-by-scene deck, built from the brief in [`../context/CLAUDE.md`](../context/CLAUDE.md): 12 scenes, Veritasium look, physics reused from v2. | [screenshots](v3-first-deck/) (source was edited in place, so only images remain) |
 | v4 | Phase-plane sequence after Shiller and Lu (1992): 6 new scenes, derivations in the speaker notes, 17 scenes in total. | [`v4-phase-plane.html`](v4-phase-plane.html) |
 | v5 | B-spline speed profile: "Smooth it with a B-spline" and the "Smooth or fast?" slider. 19 scenes. | [`v5-bspline-speed.html`](v5-bspline-speed.html) |
-| v6 | B-spline path: "Smooth the path, too". 20 scenes. **Current.** | [`../index.html`](../index.html), [screenshots](../docs/screenshots/) |
+| v6 | B-spline path: "Smooth the path, too". 20 scenes. | [`v6-bspline-path.html`](v6-bspline-path.html) |
+| v7 | Three scenes after Shiller and Gwo (1991): unified velocity limit curve, path optimisation with time as the cost, global search then polish. 23 scenes. **Current.** | [`../index.html`](../index.html), [screenshots](../docs/screenshots/) |
 
 ## v2: one long page
 
@@ -41,3 +42,15 @@ The bang-bang profile is time-optimal, but its acceleration jumps (infinite jerk
 ## v6: B-spline path
 
 Lines plus arcs make curvature jump, which puts cliffs into the velocity limit curve. A cubic B-spline path on the corridor centreline (one control point every 150 mm) has continuous curvature. It came out faster and safer: 1.22 s instead of 1.24 s, and 49 mm from the nearest wall instead of 39 mm. Spacing matters: one control point every 60 mm gives 1.51 s.
+
+## v7: time as the cost (Shiller and Gwo 1991)
+
+Prof. Shiller's paper on autonomous vehicles uses exactly this B-spline path, and goes one step further: it optimises the control points with the motion time along the path as the cost. Three scenes follow it:
+
+- **Many limits, one curve** (Fig. 5). Sliding, tip-over and the motor each give a velocity limit; the plan stays under the lowest. On a flat floor the paper's tip-over inequality (Eq. 30) reduces to `ṡ² ≤ g·(b/h)/κ`. A dusty patch (mobility η = 0.5) costs 1.22 → 1.29 s; a tall mouse makes tip-over dominate, 1.46 s.
+- **Time is the cost** (Fig. 6, Eqs. 35-36). A live pattern search moves the control points; a penalty counts samples inside the walls grown by half the track. 1.22 s → 1.15 s in 574 evaluations.
+- **Search, then polish** (Figs. 7, 11-12). 38 maze routes, smoothed with the cell centres as control points, filtered by a one-cell tube down to three distinct candidates, each polished. The best goes from 1.07 s to 0.70 s, because the optimised spline cuts across the open parts of the maze.
+
+Supporting changes: the planner (`topp`) accepts a per-point grip factor and an extra speed cap, and `chart` accepts a lower y limit. Both default to the old behaviour.
+
+![v7, the three new scenes](../docs/screenshots/scene-19.jpg)

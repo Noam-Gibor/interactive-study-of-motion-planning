@@ -95,11 +95,13 @@ function profilePath(segs,start=[0,0],h0=Math.PI/2,ds=2){
 // time-optimal speed along a fixed path (friction circle), forward + backward pass
 function topp(S,Ag,Vms){
   const A=Ag*G,V=Vms*1000,n=S.x.length,vl=new Float64Array(n),vf=new Float64Array(n),vb=new Float64Array(n),v=new Float64Array(n);
-  for(let i=0;i<n;i++){const k=Math.abs(S.k[i]);vl[i]=k>1e-9?Math.min(V,Math.sqrt(A/k)):V;if(S.spin[i]!==undefined)vl[i]=0}
+  // optional per-point grip factor S.mu (mobility eta, Shiller & Gwo 1991) and extra speed cap S.vcap (mm/s, e.g. tip-over)
+  const Ai=i=>S.mu?A*S.mu[i]:A;
+  for(let i=0;i<n;i++){const k=Math.abs(S.k[i]);vl[i]=k>1e-9?Math.min(V,Math.sqrt(Ai(i)/k)):V;if(S.vcap)vl[i]=Math.min(vl[i],S.vcap[i]);if(S.spin[i]!==undefined)vl[i]=0}
   vl[0]=0;
-  const free=(vv,k)=>{const al=vv*vv*Math.abs(k);return Math.max(Math.sqrt(Math.max(0,A*A-al*al)),A*.02)};
-  for(let i=0;i<n-1;i++){const ds=S.s[i+1]-S.s[i];vf[i+1]=Math.min(vl[i+1],Math.sqrt(vf[i]*vf[i]+2*free(vf[i],S.k[i])*ds))}
-  vb[n-1]=vl[n-1];for(let i=n-2;i>=0;i--){const ds=S.s[i+1]-S.s[i];vb[i]=Math.min(vl[i],Math.sqrt(vb[i+1]*vb[i+1]+2*free(vb[i+1],S.k[i+1])*ds))}
+  const free=(vv,k,i)=>{const a=Ai(i),al=vv*vv*Math.abs(k);return Math.max(Math.sqrt(Math.max(0,a*a-al*al)),a*.02)};
+  for(let i=0;i<n-1;i++){const ds=S.s[i+1]-S.s[i];vf[i+1]=Math.min(vl[i+1],Math.sqrt(vf[i]*vf[i]+2*free(vf[i],S.k[i],i)*ds))}
+  vb[n-1]=vl[n-1];for(let i=n-2;i>=0;i--){const ds=S.s[i+1]-S.s[i];vb[i]=Math.min(vl[i],Math.sqrt(vb[i+1]*vb[i+1]+2*free(vb[i+1],S.k[i+1],i+1)*ds))}
   for(let i=0;i<n;i++)v[i]=Math.min(vf[i],vb[i]);
   const alpha=A/35; // in-place spin: wheel accel / half track (70 mm track)
   const tA=new Float64Array(n),tD=new Float64Array(n);let stops=0,peakV=0;
@@ -232,13 +234,13 @@ function fatArrow(c,x0,y0,x1,y1,w,color){const a=Math.atan2(y1-y0,x1-x0),L=Math.
 
 /* ---- charts on parchment ---- */
 function niceStep(m){const r=m/4,p=Math.pow(10,Math.floor(Math.log10(r))),f=r/p;return(f<1.5?1:f<3?2:f<7?5:10)*p}
-function chart(c,bx,{xmax,ymax,xlab,ylab}){const{x:L,y:T,w:W,h:H}=bx,sx=v=>L+v/xmax*W,sy=v=>T+H-v/ymax*H;
+function chart(c,bx,{xmax,ymax,ymin=0,xlab,ylab}){const{x:L,y:T,w:W,h:H}=bx,sx=v=>L+v/xmax*W,sy=v=>T+H-(v-ymin)/(ymax-ymin)*H;
   c.fillStyle='rgba(255,250,240,.6)';c.fillRect(L,T,W,H);
   c.strokeStyle='rgba(90,60,30,.16)';c.lineWidth=1.5;c.font=`500 19px ${MONO}`;c.fillStyle='#7A6346';
-  const xs=niceStep(xmax),ys=niceStep(ymax);c.beginPath();
-  for(let v=xs;v<=xmax+1e-9;v+=xs){c.moveTo(sx(v),T);c.lineTo(sx(v),T+H)}for(let v=ys;v<=ymax+1e-9;v+=ys){c.moveTo(L,sy(v));c.lineTo(L+W,sy(v))}c.stroke();
+  const xs=niceStep(xmax),ys=niceStep(ymax-ymin),y0=Math.ceil(ymin/ys-1e-9)*ys;c.beginPath();
+  for(let v=xs;v<=xmax+1e-9;v+=xs){c.moveTo(sx(v),T);c.lineTo(sx(v),T+H)}for(let v=y0;v<=ymax+1e-9;v+=ys){c.moveTo(L,sy(v));c.lineTo(L+W,sy(v))}c.stroke();
   c.textAlign='center';c.textBaseline='top';for(let v=0;v<=xmax+1e-9;v+=xs)c.fillText(+v.toFixed(2),sx(v),T+H+8);
-  c.textAlign='right';c.textBaseline='middle';for(let v=0;v<=ymax+1e-9;v+=ys)c.fillText(+v.toFixed(2),L-10,sy(v));
+  c.textAlign='right';c.textBaseline='middle';for(let v=y0;v<=ymax+1e-9;v+=ys)c.fillText(+v.toFixed(2),L-10,sy(v));
   c.strokeStyle=COL.ink;c.lineWidth=3;c.beginPath();c.moveTo(L,T-6);c.lineTo(L,T+H);c.lineTo(L+W+6,T+H);c.stroke();
   txt(c,xlab,L+W,T+H+56,{size:26,italic:true,align:'right'});
   c.save();c.translate(L-58,T);c.rotate(-Math.PI/2);txt(c,ylab,0,0,{size:26,italic:true,align:'right'});c.restore();
@@ -388,11 +390,11 @@ function bsDraw(c,P,{pts=Infinity,upto=1,dim=false}={}){
 // 16c: B-spline PATH. Control polygon = corridor waypoints (midPoly) resampled every h mm; cubic clamped B-spline in u.
 // Curvature is continuous (C2 curve), so the velocity limit curve has no cliffs. Convex hull keeps the curve near its control polygon.
 function resamplePoly(pts,h){const o=[pts[0]];for(let i=0;i<pts.length-1;i++){const a=pts[i],b=pts[i+1],m=Math.max(1,Math.round(Math.hypot(b[0]-a[0],b[1]-a[1])/h));for(let q=1;q<=m;q++)o.push([a[0]+(b[0]-a[0])*q/m,a[1]+(b[1]-a[1])*q/m])}return o}
-function splinePath(ctrl,ds=3){
+function splinePath(ctrl,ds=3,per=400){ // per: fine samples per knot span before arc-length resampling
   const n=ctrl.length-1,t=[];for(let j=0;j<=n+4;j++)t.push(clamp(j-3,0,n-2));
   const ev=u=>{let k=3;while(k<n&&u>=t[k+1])k++;const d=[ctrl[k-3],ctrl[k-2],ctrl[k-1],ctrl[k]].map(p=>p.slice());
     for(let r=1;r<=3;r++)for(let j=3;j>=r;j--){const i=k-3+j,den=t[i+4-r]-t[i],al=den>0?(u-t[i])/den:0;d[j]=[(1-al)*d[j-1][0]+al*d[j][0],(1-al)*d[j-1][1]+al*d[j][1]]}return d[3]};
-  const M=(n-2)*400,fine=[];for(let q=0;q<=M;q++)fine.push(ev((n-2)*q/M));
+  const M=(n-2)*per,fine=[];for(let q=0;q<=M;q++)fine.push(ev((n-2)*q/M));
   // resample by arc length
   const P=[fine[0]];let acc=0;for(let q=1;q<fine.length;q++){const a=fine[q-1],b=fine[q],L=Math.hypot(b[0]-a[0],b[1]-a[1]);let used=0;
     while(acc+L-used>=ds){const f=(used+ds-acc)/L;P.push([a[0]+(b[0]-a[0])*f,a[1]+(b[1]-a[1])*f]);used+=ds-acc;acc=0}acc+=L-used}
@@ -412,6 +414,79 @@ const SP={S:splinePath(resamplePoly(midPoly(RACE),150))};SP.P=topp(SP.S,1.5,4);S
 {const phOf=P=>{const S=P.S,n=S.x.length,st=Math.max(1,Math.floor(n/700)),o={xs:[],vl:[],v:[],k:[]};for(let i=0;i<n;i+=st){o.xs.push(S.s[i]/1000);o.vl.push(Math.min(P.vl[i],4600)/1000);o.v.push(P.v[i]/1000);o.k.push(Math.abs(S.k[i])*1000)}return o};
   SP.ph=phOf(SP.P);SP.ph0=phOf(STRATS[2].P);SP.km=Math.ceil(Math.max(...SP.ph0.k,...SP.ph.k)*1.15);
   SP.cliffs=SP.ph0.xs.map((x,i)=>i).filter(i=>i&&SP.ph0.xs[i]>.02&&Math.abs(SP.ph0.vl[i]-SP.ph0.vl[i-1])>.5)}
+// ---- Shiller & Gwo 1991: unified velocity limit curve, motion time as the cost of a B-spline path, global search then local polish ----
+const MOUSE_B=35; // half track (mm): 70 mm track, as in the spin model
+const inCells=cells=>{const s=new Set(cells.map(c=>c+''));return(x,y)=>s.has(Math.floor(x/CELL)+','+Math.floor(y/CELL))};
+// Eqs. 22 and 30 on a flat floor with the mouse aligned to the path: sliding -> friction circle, tip-over -> sdot^2 <= g (b/h) / kappa
+function limitsPath(S0,{eta=1,dust=null,h=20}={}){const S=Object.assign({},S0),inDust=dust?inCells(dust):()=>false;
+  S.mu=S0.x.map((x,i)=>inDust(x,S0.y[i])?eta:1);
+  S.vcap=S0.k.map(k=>Math.abs(k)>1e-9?Math.sqrt(G*(MOUSE_B/h)/Math.abs(k)):Infinity);return S}
+const UV=(()=>{const base=SP.S,dust=[[4,2],[4,3],[3,3]],cfg=[{h:20},{h:20,eta:.5,dust},{h:40,eta:.5,dust}];
+  const runs=cfg.map(o=>{const S=limitsPath(base,o),P=topp(S,1.5,4);return{o,S,P}});
+  const n=base.x.length,st=Math.max(1,Math.floor(n/700)),ix=[];for(let i=0;i<n;i+=st)ix.push(i);
+  const cap=v=>Math.min(v,5400)/1000;
+  const curves=runs.map(r=>{const S=r.S,k=i=>Math.abs(S.k[i]);return{
+    slide:ix.map(i=>cap(k(i)>1e-9?Math.sqrt(1.5*G*S.mu[i]/k(i)):Infinity)),tip:ix.map(i=>cap(S.vcap[i])),
+    uni:ix.map(i=>cap(r.P.vl[i||1])),v:ix.map(i=>r.P.v[i]/1000)}});
+  return{dust,runs,xs:ix.map(i=>base.s[i]/1000),curves}})();
+
+// distance (mm) from a point to the nearest wall or post surface, tabulated on a 4 mm grid
+function makeDF(walls,W,H,res=4){const nx=Math.round(W*CELL/res)+1,ny=Math.round(H*CELL/res)+1,d=new Float32Array(nx*ny);
+  const segs=[...walls].map(w=>{const[a,b]=w.slice(1).split(',').map(Number);return w[0]==='h'?[a*CELL,b*CELL,(a+1)*CELL,b*CELL]:[a*CELL,b*CELL,a*CELL,(b+1)*CELL]});
+  for(let j=0;j<ny;j++)for(let i=0;i<nx;i++){const x=i*res,y=j*res;let m=Math.hypot(x-Math.round(x/CELL)*CELL,y-Math.round(y/CELL)*CELL)-8;
+    for(const[x0,y0,x1,y1]of segs){const dx=x1-x0,dy=y1-y0,f=clamp(((x-x0)*dx+(y-y0)*dy)/(dx*dx+dy*dy)),q=Math.hypot(x-x0-f*dx,y-y0-f*dy)-6;if(q<m)m=q}
+    d[j*nx+i]=m}
+  return(x,y)=>{const i=Math.round(x/res),j=Math.round(y/res);return i<0||j<0||i>=nx||j>=ny?-1:d[j*nx+i]}}
+// cost of a B-spline path (Eqs. 35-36): J = T + w n, n = samples whose centre line is closer than half the track to a wall (C-space obstacle)
+const CLEAR=MOUSE_B,PEN=.02;
+function pathCost(ctrl,df){const S=splinePath(ctrl,4,50),P=topp(S,1.5,4);let bad=0;for(let i=0;i<S.x.length;i+=2)if(df(S.x[i],S.y[i])<CLEAR)bad++;return{S,P,T:P.T,bad,J:P.T+PEN*bad}}
+// pattern (compass) search over the control points, in the spirit of Hooke and Jeeves; the first and last two points stay fixed
+function makeOpt(ctrl0,df){const o={ctrl:ctrl0.map(p=>p.slice()),d:40,i:2,dir:0,evals:0,improved:false,done:false};
+  o.best=pathCost(o.ctrl,df);o.T0=o.best.T;o.hist=[[0,o.best.T]];
+  const D=[[1,0],[-1,0],[0,1],[0,-1]],last=o.ctrl.length-3;
+  o.step=()=>{if(o.done)return;const c=o.ctrl[o.i],[dx,dy]=D[o.dir],trial=o.ctrl.map(p=>p.slice());trial[o.i]=[c[0]+dx*o.d,c[1]+dy*o.d];
+    const r=pathCost(trial,df);o.evals++;
+    if(r.J<o.best.J-1e-6){o.ctrl=trial;o.best=r;o.improved=true;o.hist.push([o.evals,r.T]);o.dir=4}else o.dir++;
+    if(o.dir>=4){o.dir=0;o.i++;if(o.i>last){o.i=2;if(!o.improved){o.d/=2;if(o.d<3){o.done=true;o.hist.push([o.evals,o.best.T])}}o.improved=false}}};
+  o.run=ms=>{const t0=performance.now();while(!o.done&&performance.now()-t0<ms)o.step()};
+  if(last<2)o.done=true;return o}
+function gwPh(P){const S=P.S,n=S.x.length,st=Math.max(1,Math.floor(n/600)),o={xs:[],vl:[],v:[]};
+  for(let i=0;i<n;i+=st){o.xs.push(S.s[i]/1000);o.vl.push(Math.min(P.vl[i||1],5400)/1000);o.v.push(P.v[i]/1000)}return o}
+const GW={};
+function gwReset(){if(!GW.df){GW.df=makeDF(RACE_W,6,6);GW.ctrl0=SP.S.ctrl.map(p=>p.slice())}GW.opt=makeOpt(GW.ctrl0,GW.df);GW.init=GW.opt.best;GW.initPh=gwPh(GW.init.P);GW.ph=null;GW.phOf=null}
+
+// global search: every maze route up to `extra` cells longer than the shortest, cell centres as B-spline control points, then a tube filter
+function allRoutes(walls,W,H,s,g,extra,cap){const D=flood(walls,W,H,[g]).D,maxL=D[s[0]][s[1]]+extra,out=[],path=[s],seen=new Set([s+'']);
+  const go=c=>{if(out.length>=cap)return;if(c[0]===g[0]&&c[1]===g[1]){out.push(path.slice());return}
+    for(const[di,dj]of DIRS){const a=c[0]+di,b=c[1]+dj;if(a<0||b<0||a>=W||b>=H||blocked(walls,c[0],c[1],di,dj)||seen.has(a+','+b))continue;
+      if(path.length+D[a][b]>maxL)continue;seen.add(a+','+b);path.push([a,b]);go([a,b]);path.pop();seen.delete(a+','+b)}};
+  go(s);return out}
+const SR={seed:6,loops:9,start:[0,0],goal:[5,5]};
+function srInit(){if(SR.cands)return;SR.walls=genMaze(6,6,SR.seed,SR.loops,[SR.goal]);SR.df=makeDF(SR.walls,6,6);
+  const routes=allRoutes(SR.walls,6,6,SR.start,SR.goal,8,600);SR.n=routes.length;
+  const sc=routes.map(r=>({r,ctrl:r.map(ctr),c:pathCost(r.map(ctr),SR.df)})).filter(o=>o.c.bad===0).sort((a,b)=>a.c.T-b.c.T);
+  SR.cands=sc.slice(0,6);
+  const near=(a,b)=>b.r.every(q=>a.r.some(p=>Math.max(Math.abs(p[0]-q[0]),Math.abs(p[1]-q[1]))<=1));
+  SR.kept=[];for(const k of SR.cands)if(!SR.kept.some(a=>near(a,k)))SR.kept.push(k);SR.kept=SR.kept.slice(0,3);
+  SR.simTo=SR.cands.map(k=>SR.kept.includes(k)?-1:SR.cands.indexOf(SR.kept.find(a=>near(a,k))));SR.opts=null}
+// front view of the mouse for the tip-over limit (after Shiller & Gwo, Fig. 4): half track b, centre of mass height h
+function tipView(c,cx,gy,h){const s=1.6,b=MOUSE_B*s,H=h*s;
+  c.save();c.strokeStyle=COL.ink;c.lineWidth=3;c.beginPath();c.moveTo(cx-b-40,gy);c.lineTo(cx+b+40,gy);c.stroke();
+  c.fillStyle='#E9E5DE';c.strokeStyle='#5E5A54';c.lineWidth=2;rrect(c,cx-b-4,gy-2*H,2*b+8,2*H-8,8);c.fill();c.stroke();
+  c.fillStyle='#2B2B2B';for(const sg of[-1,1]){rrect(c,cx+sg*b-8,gy-24,16,24,4);c.fill()}
+  fatArrow(c,cx,gy-H,cx+64,gy-H,10,COL.orange);ringDot(c,cx,gy-H,COL.ink,8);
+  c.strokeStyle=COL.purple;c.lineWidth=2;c.beginPath();c.moveTo(cx-b-18,gy);c.lineTo(cx-b-18,gy-H);c.moveTo(cx,gy+14);c.lineTo(cx+b,gy+14);c.stroke();c.restore();
+  txt(c,'h',cx-b-26,gy-H/2+8,{mono:true,size:22,color:COL.purple,align:'right'});txt(c,'b',cx+b/2,gy+38,{mono:true,size:22,color:COL.purple,align:'center'})}
+// walls of a maze grown by half the track: the C-space obstacles the centre line must avoid
+function grownWalls(c,B,walls,r){c.save();c.fillStyle=c.strokeStyle='rgba(233,69,69,.2)';c.lineWidth=(12+2*r)*B.sc;c.lineCap='round';c.beginPath();
+  for(const w of walls){const[a,b]=w.slice(1).split(',').map(Number);if(w[0]==='h'){c.moveTo(B.X(a*CELL),B.Y(b*CELL));c.lineTo(B.X((a+1)*CELL),B.Y(b*CELL))}else{c.moveTo(B.X(a*CELL),B.Y(b*CELL));c.lineTo(B.X(a*CELL),B.Y((b+1)*CELL))}}
+  c.stroke();for(let i=0;i<=B.W;i++)for(let j=0;j<=B.H;j++){c.beginPath();c.arc(B.X(i*CELL),B.Y(j*CELL),(8+r)*B.sc,0,7);c.fill()}c.restore()}
+// the optimisation loop of Shiller & Gwo, Fig. 6, as three chips with a return arrow
+function loopChips(c,x,y,labels,active){c.save();c.font=`22px ${SERIF}`;let cx=x;const xs=[];
+  labels.forEach((l,k)=>{const w=c.measureText(l).width+28;rrect(c,cx,y-22,w,44,22);c.fillStyle=k===active?COL.purple:'rgba(255,250,240,.85)';c.fill();c.strokeStyle=COL.purple;c.lineWidth=2;c.stroke();
+    c.fillStyle=k===active?'#fff':COL.ink;c.textAlign='left';c.textBaseline='middle';c.fillText(l,cx+14,y+1);xs.push([cx,cx+w]);cx+=w;if(k<labels.length-1){fatArrow(c,cx+4,y,cx+26,y,6,COL.purple);cx+=30}});
+  c.strokeStyle=COL.purple;c.lineWidth=2.5;c.beginPath();const x0=(xs[0][0]+xs[0][1])/2,x1=(xs[xs.length-1][0]+xs[xs.length-1][1])/2;c.moveTo(x1,y+22);c.lineTo(x1,y+40);c.lineTo(x0,y+40);c.lineTo(x0,y+28);c.stroke();
+  c.fillStyle=COL.purple;c.beginPath();c.moveTo(x0,y+22);c.lineTo(x0-7,y+32);c.lineTo(x0+7,y+32);c.closePath();c.fill();c.restore()}
 const A_MS=1.5*G/1000; // grip in m/s^2, same 1.5 g as the planner
 // chart with a signed y axis (for accelerations)
 function schart(c,bx,{xmax,ymax,xlab,ylab}){const{x:L,y:T,w:W,h:H}=bx,sx=v=>L+v/xmax*W,sy=v=>T+H/2-v/ymax*H/2;
@@ -742,7 +817,7 @@ const SCENES=[
     '<li><b>Continuous curvature.</b> A cubic B-spline is C², so heading and curvature κ(s) are continuous. Then Ṡmax(s) = √(a/κ) is continuous too: slopes instead of cliffs, and the sideways acceleration ramps in like a clothoid.</li>'+
     '<li><b>Convex hull again.</b> Each piece of the curve lies inside the hull of 4 neighbouring control points. They sit on the corridor centreline, so the curve stays inside the corridor. Collision checking reduces to checking control points (Lecture 2 C-space: shrink the mouse to a point, grow the walls by half its width).</li></ol>'+
     '<p><b>Result</b> (same planner, 1.5 g, 4 m/s): arcs and lines 1.24 s with the centreline 39 mm from the nearest wall or post; B-spline 1.22 s with 49 mm, tightest radius about 124 mm. Faster AND more room. Spacing is a design knob: control points every 60 mm make tight corners and 1.51 s.</p>'+
-    '<p><b>Honest notes:</b> the spacing was picked by trying a few values; a real optimiser would move the control points to minimise the time T directly, with time as the cost (the Shiller and Dubowsky idea on the last slide). Curvature here is computed numerically from the sampled curve.',
+    '<p><b>Honest notes:</b> the spacing was picked by trying a few values; the next slides do the real thing: they move the control points to minimise the time T directly, with the motion time as the cost, as Shiller and Gwo (1991) did for vehicles on rough terrain. Curvature here is computed numerically from the sampled curve.',
   draw(c,{b,bt}){
     const A=STRATS[2],B=mkBoard(90,230,520,6,6),O=SP.ph0,Q=SP.ph,sm=Math.max(O.xs[O.xs.length-1],Q.xs[Q.xs.length-1]);
     drawBoard(c,B,RACE_W);cheese(c,B,[3,5]);
@@ -766,6 +841,104 @@ const SCENES=[
           drawMouse(c,130,850+k*60,0,24,col);txt(c,`${tt.toFixed(2)} s`,180,862+k*60,{mono:true,size:40,color:col});
           txt(c,`↔ ${Math.round(gap)} mm`,400,862+k*60,{mono:true,size:30,color:'#7A6346'})})}}
     cite(c,'cf. Shiller & Lu 1992: discontinuity points')}},
+
+{ title:'Many limits, one curve', caption:'The lowest limit wins, point by point.', builds:4,
+  notes:`Shiller and Gwo (1991), Section IV: every physical limit of a vehicle becomes a velocity limit along the path, and the speed plan only has to stay under the LOWEST of them, the unified velocity limit curve (their Fig. 5). Build 1: three separate limits for our mouse. Build 2: the unified curve, the forbidden region above it, and the time-optimal plan under it (${UV.runs[0].P.T.toFixed(2)} s on the B-spline path). Build 3: a dusty patch. Build 4: a tall mouse.</p><p><b>From the paper to the mouse</b></p><ol>`+
+    `<li><b>Sliding</b> (Eqs. 21-24): total friction force ≤ μR. On a flat floor (k_t = k_q = 0, k_r = 1, n_q = 1, n_r = 0), Eq. 22 becomes <code>s̈² + κ²ṡ⁴ ≤ (μg)²</code>, the friction circle of the earlier slides, and Eq. 24 gives <code>ṡ ≤ √(μg/κ)</code> (orange).</li>`+
+    `<li><b>Tip-over</b> (Eqs. 26-31, Fig. 4): the moment of the sideways friction force about the outer wheel must not beat the weight: <code>f_y² ≤ (R·b/h)²</code>. With the mouse aligned to the path (θ = 0) on a flat floor, a₁ = a₂ = a₃ = 0, a₄ = κ², a₅ = 0 and a₆ = -g²(b/h)², so Eq. 30 reduces to <code>ṡ² ≤ g·(b/h)/κ</code> (purple). Half track b = 35 mm, centre of mass h = 20 mm: b/h = 1.75 is more than μ = 1.5, so the mouse slides before it tips.</li>`+
+    `<li><b>Engine force</b> (Eqs. 19-20) limits acceleration in the paper; for the mouse we use the motor top speed, 4 m/s (dashed). <b>Contact</b> (Eq. 25) needs a road that curves away from the wheels (n_r &lt; 0), so it never binds on a flat maze.</li>`+
+    `<li><b>Mobility</b> (Section V-C): a factor η in [0, 1] multiplies μ. Dust with η = 0.5 lowers the sliding limit there, and also the grip left for braking: ${UV.runs[0].P.T.toFixed(2)} s becomes ${UV.runs[1].P.T.toFixed(2)} s.</li>`+
+    `<li><b>Tall mouse</b>, h = 40 mm: b/h = 0.875 is now below μ, so tip-over drops under sliding everywhere and dominates the unified curve, exactly the paper's Fig. 13 remark ("the tip-over constraint dominates the limit curves due to the high aspect ratio"). Time: ${UV.runs[2].P.T.toFixed(2)} s.</li></ol>`+
+    `<p><b>Honest note:</b> like the paper (Section VII-B), we build the plan from the lowest limit curve and neglect the coupling between constraints: tip-over only caps the speed, the friction circle alone sets the acceleration window.`,
+  draw(c,{b,bt}){
+    const k=b<2?0:b-1,C=UV.curves[k],R=UV.runs[k],xs=UV.xs,sm=xs[xs.length-1],S=SP.S,B=mkBoard(90,230,520,6,6);
+    drawBoard(c,B,RACE_W,()=>{if(b<2)return;const a=b===2?ease(bt*2):1;c.save();c.globalAlpha=a;
+      for(const[i,j]of UV.dust){const r=rng(i*7+j*13),x0=B.X(i*CELL),y0=B.Y((j+1)*CELL),w=CELL*B.sc;c.fillStyle='rgba(205,185,150,.4)';c.fillRect(x0,y0,w,w);
+        c.fillStyle='rgba(240,230,210,.6)';for(let q=0;q<70;q++){c.beginPath();c.arc(x0+r()*w,y0+r()*w,1+r()*2.2,0,7);c.fill()}}c.restore()});
+    cheese(c,B,[3,5]);strokeS(c,B,S,0,S.x.length-1,'#8C8C8C',14*B.sc,{alpha:.7});
+    const ch=chart(c,{x:800,y:185,w:1040,h:665},{xmax:sm,ymax:5.4,xlab:'s, distance along path (m)',ylab:'ṡ (m/s)'});
+    if(b>=1){const a=b===1?ease(bt*2):1;c.save();c.globalAlpha=a;c.beginPath();c.moveTo(ch.sx(0),ch.sy(5.4));xs.forEach((x,q)=>c.lineTo(ch.sx(x),ch.sy(C.uni[q])));
+      c.lineTo(ch.sx(sm),ch.sy(5.4));c.closePath();c.fillStyle='rgba(233,69,69,.13)';c.fill();c.restore();
+      txt(c,'forbidden',ch.sx(sm*.5),ch.sy(4.55),{size:34,color:COL.red,align:'center',alpha:a})}
+    const u=b===0?sm*ease(bt/2.2):Infinity,dim=b>=1?.5:1;
+    plot(c,ch,xs,xs.map(()=>4),'#6E5B45',{w:3,dash:[12,9],upto:u,alpha:dim});
+    plot(c,ch,xs,C.slide,COL.orange,{w:3.5,upto:u,alpha:dim});plot(c,ch,xs,C.tip,COL.purple,{w:3.5,upto:u,alpha:dim});
+    txt(c,'motor',830,165,{size:34,color:'#6E5B45'});txt(c,'sliding',975,165,{size:34,color:COL.orange});txt(c,'tip-over',1140,165,{size:34,color:COL.purple});
+    if(b>=1){const f=b===1?ease(bt/1.5):1;plot(c,ch,xs,C.uni,COL.ink,{w:7,upto:sm*f});plot(c,ch,xs,C.v,COL.green,{w:5,upto:sm*f});
+      txt(c,'unified',1700,165,{size:34,color:COL.ink,align:'right'});txt(c,'plan',1830,165,{size:34,color:COL.green,align:'right'});
+      const per=R.P.T/.4+1,tt=Math.min(R.P.T,lp(bt,per)*.4),p=poseAt(R.P,tt);strokeS(c,B,R.S,0,p.i,COL.green,26*B.sc);mouseAt(c,B,p)}
+    else mouseAt(c,B,{x:S.x[0],y:S.y[0],h:S.h[0]});
+    tipView(c,190,930,b===3?40:20);
+    txt(c,'ṡ² ≤ g·(b/h)/κ',360,860,{mono:true,size:26,color:COL.purple});
+    if(b>=1)txt(c,`${R.P.T.toFixed(2)} s`,360,925,{mono:true,size:52,color:COL.green});
+    if(b>=2)txt(c,b===2?'dust η = 0.5':'+ tall mouse',560,925,{size:32,color:'#7A6346'});
+    cite(c,'after Shiller & Gwo 1991: Fig. 5, Eqs. 22, 30')}},
+
+{ title:'Time is the cost', caption:'Move the control points. Keep what saves time.', builds:3,
+  notes:'Shiller and Gwo (1991), Section VI-B and Fig. 6. The path is a B-spline, so a handful of control points describe it completely. Make them the variables of a parameter optimisation, and use the motion time along the path, computed by the bang-bang planner under the velocity limit curve, as the cost: <code>min J(a)</code> over the control points a (Eq. 35). All the dynamic constraints are already inside the time, so the optimisation itself is unconstrained.</p><p><b>What runs on screen</b></p><ol>'+
+    '<li><b>Start:</b> the B-spline path of the previous slides (purple), 16 control points. The first two and the last two stay fixed so the mouse leaves the start and enters the goal straight.</li>'+
+    '<li><b>Penalty</b> (Eq. 36): <code>J = T + w·n</code>, where n counts path samples whose centre line comes closer than half the track (35 mm) to a wall or post. The pink bands are exactly those C-space obstacles: walls grown by half the mouse (Lecture 2). Here w = 0.02 s per sample.</li>'+
+    '<li><b>Search:</b> the paper uses a pattern search that needs no gradients (Hooke and Jeeves, their ref. [4]), because the time is not a smooth function of the control points. Ours is the simplest version: nudge one control point up, down, left or right by a step; keep the move if J drops; when a full sweep fails, halve the step.</li>'+
+    '<li><b>Result:</b> the corners open up until the path touches the grown walls, the turns get larger radii, and the time drops by about 6% (1.22 s to about 1.15 s) with zero penalty points. Third click: the two mice race.</li></ol>'+
+    '<p>The paper needed about 15 minutes on a Silicon Graphics IRIS-4D for a path with 10 control points; here a few hundred evaluations take a fraction of a second, so it is slowed down to watch. Their honest note applies here too: a pattern search is a heuristic, so the result is a local optimum, not a guaranteed global one. The paper also explains why B-splines: they are second-order continuous, "which is found to be essential for time-optimal paths" (Section V-B).',
+  setup(){gwReset()},replay(){gwReset()},
+  draw(c,{b,bt}){
+    if(!GW.opt)gwReset();const O=GW.opt;
+    if(b>=1&&!O.done){if(REDUCE||b===2)O.run(1e5);else for(let q=0;q<3;q++)O.step()}
+    const best=O.best;if(GW.phOf!==best){GW.phOf=best;GW.ph=gwPh(best.P)}
+    const B=mkBoard(90,230,520,6,6);drawBoard(c,B,RACE_W,()=>grownWalls(c,B,RACE_W,CLEAR));cheese(c,B,[3,5]);
+    strokeS(c,B,GW.init.S,0,GW.init.S.x.length-1,COL.purple,(b?12:26)*B.sc,{alpha:b?.5:1});
+    if(b>=1)strokeS(c,B,best.S,0,best.S.x.length-1,COL.green,26*B.sc);
+    const ctrl=b>=1?O.ctrl:GW.ctrl0;c.save();c.strokeStyle='#fff';c.globalAlpha=.55;c.lineWidth=2;c.setLineDash([6,6]);c.beginPath();
+    ctrl.forEach((p,q)=>q?c.lineTo(B.X(p[0]),B.Y(p[1])):c.moveTo(B.X(p[0]),B.Y(p[1])));c.stroke();c.restore();
+    ctrl.forEach((p,q)=>ringDot(c,B.X(p[0]),B.Y(p[1]),q<2||q>ctrl.length-3?'#8C8C8C':COL.purple,7));
+    const sm=Math.max(GW.initPh.xs[GW.initPh.xs.length-1],GW.ph.xs[GW.ph.xs.length-1]);
+    const ch=chart(c,{x:800,y:170,w:1040,h:400},{xmax:sm,ymax:5.4,xlab:'s, distance along path (m)',ylab:'ṡ (m/s)'});
+    plot(c,ch,GW.ph.xs,GW.ph.vl,'#6E5B45',{w:3,dash:[12,9]});plot(c,ch,GW.initPh.xs,GW.initPh.v,COL.purple,{w:4,alpha:b?.5:1});
+    if(b>=1)plot(c,ch,GW.ph.xs,GW.ph.v,COL.green,{w:5});
+    txt(c,'Ṡmax(s)',830,215,{size:34,color:'#6E5B45'});txt(c,'start',1010,215,{size:34,color:COL.purple});if(b>=1)txt(c,'optimised',1830,215,{size:34,color:COL.green,align:'right'});
+    const hs=O.hist,lo=Math.min(...hs.map(h=>h[1])),ymin=Math.floor((lo-.02)*50)/50,ymax=Math.ceil((O.T0+.01)*50)/50,xm=Math.max(200,O.evals*1.05);
+    const ct=chart(c,{x:800,y:665,w:1040,h:185},{xmax:xm,ymin,ymax,xlab:'',ylab:''}),sx=[],sy=[];txt(c,'T (s)',815,700,{mono:true,size:24,color:'#7A6346'});
+    hs.forEach((h,q)=>{sx.push(h[0]);sy.push(h[1]);const nx=q+1<hs.length?hs[q+1][0]:O.evals;sx.push(nx);sy.push(h[1])});
+    if(b>=1)plot(c,ct,sx,sy,COL.green,{w:4});
+    txt(c,b>=1?`${O.evals} paths tried${O.done?'':` · step ${O.d} mm`}`:'paths tried',1830,700,{mono:true,size:24,color:'#7A6346',align:'right'});
+    loopChips(c,96,815,['move a point','T along path','keep if faster'],b===1&&!O.done?(O.evals%3):-1);
+    const rows=[[GW.init,COL.purple],[best,COL.green]];
+    if(b===2){const per=Math.max(GW.init.T,best.T)/.4+1,ck=lp(bt,per)*.4;
+      rows.forEach(([r,col],q)=>{const tt=Math.min(r.T,ck),p=poseAt(r.P,tt);mouseAt(c,B,p,col);drawMouse(c,120,895+q*50,0,20,col);txt(c,`${tt.toFixed(2)} s`,160,906+q*50,{mono:true,size:34,color:col})})}
+    else{txt(c,`start ${GW.init.T.toFixed(2)} s`,96,910,{mono:true,size:30,color:COL.purple});if(b>=1)txt(c,`now ${best.T.toFixed(2)} s`,96,955,{mono:true,size:30,color:COL.green})}
+    cite(c,'after Shiller & Gwo 1991: Fig. 6, Eqs. 35-36')}},
+
+{ title:'Search, then polish', caption:'Graph search finds the valley. Local search finds the bottom.', builds:3,
+  notes:'Shiller and Gwo (1991), Section VI-C and Figs. 7, 11, 12. A local optimisation only finds the optimum near its starting guess, so the paper first runs a global search on a grid, then polishes only the promising paths.</p><ol>'+
+    '<li><b>Grid search</b> (Fig. 7): the paper searches a uniform grid for the K best paths, with a lower-bound time cost per grid segment (Dreyfus K-best paths). Our grid is the maze itself: every route from start to goal at most 8 cells longer than the shortest is listed (build 1 shows the six fastest; the count is on screen).</li>'+
+    '<li><b>Smooth and evaluate</b>: "these paths are smoothed by B splines, using the grid points as control points". We do the same with the cell centres, compute the exact time along each B-spline path, and drop paths that hit the grown walls.</li>'+
+    '<li><b>Filter</b> (build 2): the paper keeps only the best path inside a tube of radius D_max and removes its neighbours, so each survivor sits near a different local optimum. Here the tube is one cell: a route whose cells all lie within one cell of a better route is a duplicate.</li>'+
+    '<li><b>Polish</b> (build 3): run the local optimisation of the previous slide on each survivor, like the paper\'s three local optima in Fig. 12 (53.2, 54.0 and 54.6 s for their vehicle). The best of them is our answer.</li></ol>'+
+    '<p><b>Honest note</b> (the paper says the same): this is guaranteed to find the global optimum only if the grid is fine enough and K large enough. With a maze, the grid is the real world, so listing the routes is exact; the polishing is still a local, heuristic step.',
+  setup(){srInit();SR.opts=null},replay(){SR.opts=null},
+  draw(c,{b,bt}){
+    srInit();const B=mkBoard(90,190,720,6,6),cols=[COL.green,COL.blue,COL.orange,COL.magenta,COL.teal,COL.yellow],K=SR.cands;
+    drawBoard(c,B,SR.walls);cheese(c,B,SR.goal);
+    if(b===2&&!SR.opts)SR.opts=SR.kept.map(k=>makeOpt(k.ctrl,SR.df));
+    if(b===2)for(const o of SR.opts)if(!o.done){if(REDUCE)o.run(1e5);else{o.step();o.step()}}
+    const shown=b===0?Math.min(K.length,Math.floor(bt*2.5)+1):K.length,done=b===2&&SR.opts.every(o=>o.done);
+    let winner=-1;if(done){let bt2=Infinity;SR.opts.forEach((o,q)=>{if(o.best.T<bt2){bt2=o.best.T;winner=q}})}
+    for(let k=0;k<shown;k++){const S=K[k].c.S,ki=SR.kept.indexOf(K[k]);
+      if(b>=1&&ki<0){strokeS(c,B,S,0,S.x.length-1,cols[k],10*B.sc,{alpha:.15});continue}
+      if(b===2){const o=SR.opts[ki];strokeS(c,B,S,0,S.x.length-1,cols[k],10*B.sc,{alpha:.4});strokeS(c,B,o.best.S,0,o.best.S.x.length-1,cols[k],26*B.sc)}
+      else strokeS(c,B,S,0,S.x.length-1,cols[k],(b?24:14)*B.sc,{alpha:.9})}
+    if(done){const o=SR.opts[winner],per=o.best.T/.4+1,tt=Math.min(o.best.T,lp(bt,per)*.4);mouseAt(c,B,poseAt(o.best.P,tt))}
+    else mouseAt(c,B,{x:90,y:90,h:Math.PI/2});
+    txt(c,`${SR.n} routes searched`,900,240,{mono:true,size:30,color:'#7A6346'});
+    for(let k=0;k<shown;k++){const y=320+k*84,ki=SR.kept.indexOf(K[k]),off=b>=1&&ki<0,a=off?.35:1;
+      c.save();c.globalAlpha=a;c.strokeStyle=cols[k];c.lineWidth=12;c.lineCap='round';c.beginPath();c.moveTo(905,y-14);c.lineTo(960,y-14);c.stroke();c.restore();
+      txt(c,`#${k+1}`,985,y,{size:44,color:cols[k],alpha:a});txt(c,`${K[k].c.T.toFixed(2)} s`,1070,y,{mono:true,size:40,alpha:a});
+      txt(c,`${K[k].r.length} cells`,1260,y,{mono:true,size:24,color:'#7A6346',alpha:a});
+      if(off)txt(c,SR.simTo[k]>=0?`≈ #${SR.simTo[k]+1}`:'dropped',1420,y,{mono:true,size:26,color:'#7A6346',alpha:.8});
+      if(b===2&&ki>=0){const o=SR.opts[ki];txt(c,`→ ${o.best.T.toFixed(2)} s`,1420,y,{mono:true,size:40,color:cols[k]});if(done&&ki===winner)emoji(c,'🏆',1700,y-14,48)}}
+    if(b>=1)txt(c,b===1?'filter: one per tube':'polish each survivor',900,860,{size:38,color:COL.purple});
+    cite(c,'after Shiller & Gwo 1991: Figs. 7, 11, 12')}},
 
 { title:'The race', caption:'Same cells. 3× faster.', builds:2,
   notes:'Same maze, same cells, same physics (1.5 g grip, 4 m/s top speed). Only the motion plan differs. Stop and spin brakes to zero at every corner. Smooth 90s keep moving but at the search-turn speed. Large turns plus diagonals cut corners, run the zigzag as one diagonal, and spend more time at high speed. Shown at half speed; the timers are real planner times. Lecture 1: optimal means time.',
