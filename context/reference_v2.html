@@ -1,0 +1,527 @@
+<title>Micromouse Motion Planning</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Atkinson+Hyperlegible:wght@400;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: one bright lab notebook column; each section is a bench with a live experiment on it. Single light theme by choice. */
+:root{
+  --bg:#F3F7FF; --paper:#FFFFFF; --ink:#18213D; --muted:#5A6688; --line:#DCE3F2;
+  --wall:#E5383B; --lime:#9BC53D; --blue:#3D7FE0; --orange:#F28C28; --magenta:#C83FD1; --green:#20A86B; --sun:#FFD23F;
+  --spin:#F28C28; --smooth:#3D7FE0; --diag:#20A86B;
+  --display:"Bricolage Grotesque",ui-rounded,"Segoe UI",system-ui,sans-serif;
+  --body:"Atkinson Hyperlegible",system-ui,"Segoe UI",sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,Consolas,monospace;
+  color-scheme:light;
+}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--body);font-size:16px;line-height:1.55;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:0 48px}
+.wrap{max-width:1080px;margin:0 auto;display:flex;flex-direction:column;gap:28px}
+h1,h2,h3{font-family:var(--display);text-wrap:balance;margin:0;line-height:1.1}
+h1{font-size:clamp(2.2rem,6vw,3.8rem);font-weight:800;letter-spacing:-.02em}
+h2{font-size:clamp(1.5rem,3.4vw,2.1rem);font-weight:800}
+h3{font-size:1.1rem;font-weight:700}
+p{margin:0;max-width:68ch}
+.muted{color:var(--muted)}
+.eyebrow{font-family:var(--mono);font-size:.75rem;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+code,.mono{font-family:var(--mono);font-size:.9em}
+
+header.hero{padding-top:36px;display:grid;grid-template-columns:1.3fr 1fr;gap:28px;align-items:center}
+.hero .lead{font-size:1.15rem;margin-top:14px}
+.hero canvas{width:100%;display:block;border-radius:18px;background:var(--paper);border:2px solid var(--line)}
+.facts{display:flex;flex-wrap:wrap;gap:10px;margin-top:18px}
+.fact{background:var(--paper);border:2px solid var(--line);border-radius:999px;padding:6px 14px;font-size:.9rem}
+.fact b{font-family:var(--mono)}
+.rainbow{height:8px;border-radius:8px;background:linear-gradient(90deg,var(--lime),var(--blue),var(--orange),var(--magenta),var(--green),var(--sun))}
+
+section.bench{background:var(--paper);border:2px solid var(--line);border-radius:22px;padding:24px;display:flex;flex-direction:column;gap:16px}
+.steps{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}
+.step{border-radius:16px;padding:16px;background:var(--bg);display:flex;flex-direction:column;gap:6px}
+.step .n{font-family:var(--display);font-weight:800;font-size:1.6rem}
+.step:nth-child(1) .n{color:var(--blue)} .step:nth-child(2) .n{color:var(--orange)} .step:nth-child(3) .n{color:var(--magenta)} .step:nth-child(4) .n{color:var(--green)}
+
+.lib{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:14px}
+.card{border:2px solid var(--line);border-radius:16px;padding:12px;display:flex;flex-direction:column;gap:8px;min-width:0}
+.card canvas{width:100%;display:block;border-radius:10px;background:#FCFDFF}
+.card .meta{font-family:var(--mono);font-size:.78rem;color:var(--muted)}
+
+.grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+.panel{border:2px solid var(--line);border-radius:16px;padding:12px;min-width:0;display:flex;flex-direction:column;gap:8px}
+.panel canvas{width:100%;display:block}
+.controls{display:flex;flex-wrap:wrap;gap:14px 22px;align-items:flex-end}
+.ctl{display:flex;flex-direction:column;gap:4px;min-width:180px;flex:1}
+.ctl label{font-weight:700;font-size:.9rem;display:flex;justify-content:space-between;gap:8px}
+.ctl label span{font-family:var(--mono);font-weight:600;color:var(--blue)}
+.ctl small{color:var(--muted);font-size:.78rem}
+input[type=range]{width:100%;accent-color:var(--blue)}
+.toggle{display:flex;gap:8px;align-items:center;font-weight:700;font-size:.9rem;cursor:pointer}
+input[type=checkbox]{width:18px;height:18px;accent-color:var(--magenta)}
+button{font-family:var(--display);font-weight:700;font-size:1rem;border:0;border-radius:999px;padding:10px 20px;cursor:pointer;background:var(--ink);color:#fff}
+button.alt{background:var(--bg);color:var(--ink);border:2px solid var(--line)}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid var(--sun);outline-offset:2px}
+select{font-family:var(--body);font-size:.95rem;padding:8px;border-radius:10px;border:2px solid var(--line);background:var(--paper);color:var(--ink)}
+
+.stats{display:flex;flex-wrap:wrap;gap:10px}
+.stat{background:var(--bg);border-radius:12px;padding:8px 12px;min-width:120px;flex:1}
+.stat .k{font-size:.75rem;color:var(--muted)}
+.stat .v{font-family:var(--mono);font-weight:600;font-size:1.15rem;font-variant-numeric:tabular-nums}
+
+.race{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;align-items:start}
+.racers{display:flex;flex-direction:column;gap:10px}
+.racer{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center;border:2px solid var(--line);border-radius:14px;padding:10px 12px}
+.racer .sw{width:16px;height:16px;border-radius:50%}
+.racer .t{font-family:var(--mono);font-weight:600;font-size:1.2rem;font-variant-numeric:tabular-nums}
+.racer .d{font-size:.8rem;color:var(--muted)}
+.racer.win{border-color:var(--green);background:#ECFAF2}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{font-family:var(--mono);font-size:.78rem;border-radius:8px;padding:3px 8px;color:#fff;white-space:nowrap}
+.chip.raw{background:var(--bg);color:var(--ink);border:1px solid var(--line)}
+
+.math{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+.eq{background:var(--bg);border-radius:16px;padding:16px;display:flex;flex-direction:column;gap:8px;min-width:0}
+.eq .f{font-family:var(--mono);font-size:1.05rem;font-weight:600;background:var(--paper);border-radius:10px;padding:8px 10px;overflow-x:auto}
+pre{font-family:var(--mono);font-size:.82rem;background:var(--bg);border-radius:14px;padding:14px;overflow-x:auto;margin:0;line-height:1.5}
+.note{font-size:.85rem;color:var(--muted)}
+a{color:var(--blue)}
+.tag{font-family:var(--mono);font-size:.68rem;font-weight:600;letter-spacing:.06em;text-transform:uppercase;border-radius:999px;padding:2px 8px;vertical-align:middle;margin-left:6px}
+.tag.on{background:#E3EEFF;color:var(--blue)} .tag.off{background:#E4F7EC;color:var(--green)}
+.lec{display:inline-block;font-family:var(--mono);font-size:.72rem;font-weight:600;border-radius:8px;padding:2px 8px;background:var(--sun);color:var(--ink)}
+.conn{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:14px}
+.cc{border:2px solid var(--line);border-radius:16px;padding:14px;display:flex;flex-direction:column;gap:8px;min-width:0}
+.cc .slide{font-size:.85rem;background:var(--bg);border-radius:10px;padding:6px 10px;font-style:italic}
+.cc.warn{border-color:var(--orange);background:#FFF6EC}
+.flood{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:16px;align-items:start}
+.flood canvas{cursor:pointer}
+.msg{font-weight:700;color:var(--wall)}
+@media (max-width:820px){.flood{grid-template-columns:minmax(0,1fr)}}
+footer{font-size:.85rem;color:var(--muted)}
+
+@media (max-width:820px){
+  header.hero,.race,.grid2,.math{grid-template-columns:minmax(0,1fr)}
+  .steps{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media (max-width:440px){.steps{grid-template-columns:minmax(0,1fr)}}
+</style>
+
+<div class="wrap">
+<header class="hero">
+  <div>
+    <div class="eyebrow">Motion planning · class talk</div>
+    <h1>🐭 Micromouse Motion Lab</h1>
+    <p class="lead">A palm-sized robot solves a maze, then races the solution in a few seconds. Finding the path is the easy part. The hard part is <b>how fast you are allowed to go around every corner</b>, and how to shape the corners so you can go faster.</p>
+    <div class="facts">
+      <div class="fact">🧩 <b>16×16</b> cells</div>
+      <div class="fact">📏 <b>18 cm</b> per cell</div>
+      <div class="fact">🎯 goal in the centre</div>
+      <div class="fact">🔎 search run, then ⚡ speed run</div>
+    </div>
+  </div>
+  <canvas id="heroCv" aria-label="Turn library drawn from one entry point"></canvas>
+</header>
+<div class="rainbow" aria-hidden="true"></div>
+
+<section class="bench">
+  <div class="eyebrow">The pipeline</div>
+  <h2>From maze to motion in four steps</h2>
+  <div class="steps">
+    <div class="step"><div class="n">1 🔎</div><h3>Search <span class="tag on">online</span></h3><p class="muted">Explore with flood fill: every cell stores its distance to the goal, updated as new walls are seen.</p></div>
+    <div class="step"><div class="n">2 🗺️</div><h3>Plan the path <span class="tag off">offline</span></h3><p class="muted">Pick the route that is fastest to <i>drive</i>, which is not always the one with the fewest cells.</p></div>
+    <div class="step"><div class="n">3 🧱</div><h3>Compile moves <span class="tag off">offline</span></h3><p class="muted">Turn the cell list <code>F F R F L…</code> into a chain of pre-tuned moves from a turn library.</p></div>
+    <div class="step"><div class="n">4 📈</div><h3>Speed profile <span class="tag off">offline</span></h3><p class="muted">Accelerate on straights, brake just in time, hold the turn speed that grip allows.</p></div>
+  </div>
+</section>
+
+
+<section class="bench">
+  <div class="eyebrow">📚 Course connections</div>
+  <h2>Where this sits in our motion planning course</h2>
+  <p>Lecture 1 defines <b>trajectory = path + velocity profile</b>. A micromouse speed run is built exactly that way, so almost every idea from the first three lectures shows up in a 25 cm robot.</p>
+  <div class="conn">
+    <div class="cc"><span class="lec">Lecture 2</span><h3>🧩 Grid cell decomposition</h3><div class="slide">"Uniform grid: resolution complete, curse of dimensionality"</div><p class="muted">The maze is a ready-made uniform grid: 256 nodes, walls are missing edges. A rare case where the grid is the real world, so resolution costs nothing.</p></div>
+    <div class="cc"><span class="lec">Lecture 2</span><h3>📐 C-space obstacles</h3><div class="slide">"COB = configurations where the robot intersects WOB"</div><p class="muted">Shrink the mouse to a point and grow the walls by half its width. That decides whether a diagonal fits between posts. On a diagonal the body is rotated, so the real C-space is (x, y, θ).</p></div>
+    <div class="cc"><span class="lec">Lectures 2 + 3</span><h3>🌊 Bellman and Dijkstra from G</h3><div class="slide">"Open node G, u<sub>G</sub> = 0 ... u<sub>j</sub> = min(u<sub>k</sub> + a<sub>kj</sub>)"</div><p class="muted">Micromouse flood fill starts at the goal and spreads outward, giving the cost from <i>every</i> cell. With all edges = 1 it is breadth-first search. Put time on the edges and it becomes true Dijkstra, and A* can speed it up.</p></div>
+    <div class="cc"><span class="lec">Lecture 1</span><h3>⏱️ Time, not distance</h3><div class="slide">"Optimal trajectory planning (time, energy, not distance)"</div><p class="muted">The fewest cells is not the fastest run. Long straights and diagonals beat a short, twisty route. The race below drives the same cells three ways.</p></div>
+    <div class="cc"><span class="lec">Lectures 1 + 3</span><h3>🛣️ Path-velocity decomposition</h3><div class="slide">"Optimize motion along a specified path"</div><p class="muted">Fix the path first (turn library), then find the fastest speed along it in the phase plane (s, ṡ) with a forward and a backward pass.</p></div>
+    <div class="cc"><span class="lec">Lecture 1</span><h3>🔁 Online vs offline</h3><div class="slide">"Online: task changes during motion, react, sensor based"</div><p class="muted">The search run is online: new walls appear and the map re-floods. The speed run is offline: the task is known, compute everything, then move.</p></div>
+    <div class="cc warn"><span class="lec">Honest limit</span><h3>⚠️ Near-optimal, not optimal</h3><p class="muted">Path and speed are never optimised together. The turn shapes are hand-tuned and chosen before the speed plan. That is the price of path-velocity decomposition: fast to compute, but the true time-optimal trajectory could bend the path differently.</p></div>
+  </div>
+</section>
+
+<section class="bench">
+  <div class="eyebrow">Interactive 1 · the search · 📚 Dijkstra from the goal</div>
+  <h2>Flood fill: every cell learns its distance to the cheese 🧀</h2>
+  <p>Exactly like the Dijkstra slides: open the goal with cost 0, then every neighbour gets <code>u<sub>j</sub> = min(u<sub>k</sub> + a<sub>kj</sub>)</code>. Once the wave reaches the start, the mouse just rolls downhill: always step to the neighbour with a smaller number. That is Bellman's principle in action.</p>
+  <div class="flood">
+    <div class="panel"><canvas id="fCv" aria-label="Flood fill maze, tap a wall gap to toggle a wall"></canvas></div>
+    <div style="display:flex;flex-direction:column;gap:14px;min-width:0">
+      <div class="controls"><button id="fGo">▶ Flood from goal</button><button class="alt" id="fReset">↺ Reset walls</button></div>
+      <div class="stats" id="fStats"></div>
+      <p>👆 <b>Tap any wall or gap</b> to add or remove a wall. That is the mouse discovering a wall during the search run. The whole map re-floods at once, because Dijkstra already gave the cost from <i>all</i> nodes.</p>
+      <p class="msg" id="fMsg"></p>
+      <p class="note">Here every move costs 1, so this is breadth-first search. Competitive mice put estimated <b>time</b> on each edge (a turn costs more than a straight), which makes it full Dijkstra and can pick a longer but faster route.</p>
+    </div>
+  </div>
+</section>
+<section class="bench">
+  <div class="eyebrow">Step 3 · the turn library · 📚 the path</div>
+  <h2>Each turn is a stored, tuned trajectory</h2>
+  <p>The fast mice do not improvise turns. They keep a small library of shapes, each with a fixed radius, entry offset and speed. The grey dashed line is the cell centre path. The coloured line is the move the mouse actually drives. Bigger radius means a higher allowed speed, because <code>v = √(a·r)</code>.</p>
+  <div class="lib" id="lib"></div>
+</section>
+
+<section class="bench">
+  <div class="eyebrow">Interactive 2 · the corner lab · 📚 the velocity profile</div>
+  <h2>How should you take one 90° corner?</h2>
+  <p>Three cells straight, a right turn, three cells straight. Drag the radius. At <b>0</b> the mouse stops and spins in place. Bigger arcs let it carry more speed but must still fit between the walls. Toggle the clothoid to see why real mice ease into turns.</p>
+  <div class="controls">
+    <div class="ctl"><label for="cr">Turn radius <span id="crv"></span></label><input id="cr" type="range" min="0" max="300" step="10" value="90"><small>90 mm is the classic in-cell "search turn"</small></div>
+    <div class="ctl"><label for="ca">Grip <span id="cav"></span></label><input id="ca" type="range" min="0.5" max="5" step="0.1" value="1.5"><small>max total acceleration · no fan ≈ 1 g · fan → several g</small></div>
+    <div class="ctl"><label for="cv">Top speed <span id="cvv"></span></label><input id="cv" type="range" min="1" max="7" step="0.25" value="4"><small>motor limit on the straights</small></div>
+    <label class="toggle"><input id="cc" type="checkbox"> 🌀 Clothoid entry and exit</label>
+  </div>
+  <div class="stats" id="cstats"></div>
+  <div class="grid2">
+    <div class="panel"><h3>🗺️ The path</h3><canvas id="cGeo"></canvas></div>
+    <div class="panel"><h3>⏱️ Corner time vs radius</h3><canvas id="cSweep"></canvas><p class="note">Every radius at the current grip and top speed. The dot is your setting.</p></div>
+    <div class="panel"><h3>📈 Speed over time</h3><canvas id="cV"></canvas><p class="note">Accelerate, brake to the corner speed, hold it through the arc, accelerate again.</p></div>
+    <div class="panel"><h3>↪️ Sideways force over time</h3><canvas id="cLat"></canvas><p class="note">A pure arc switches sideways force on instantly (infinite jerk, wheels slip). A clothoid ramps it.</p></div>
+  </div>
+  <div class="panel"><h3>🧭 Phase plane (s, ṡ): the speed plan, built in two passes</h3><canvas id="cPhase"></canvas>
+    <p class="note"><b style="color:#5A6688">Dashed grey</b>: speed limit from grip, √(a/κ). <b style="color:#F28C28">Orange</b>: forward pass, full acceleration from rest. <b style="color:#C83FD1">Pink</b>: backward pass, full braking into each limit. <b style="color:#20A86B">Green</b>: the lower of the two, the time-optimal speed along this path. The switching points are where orange meets pink.</p></div>
+</section>
+
+<section class="bench">
+  <div class="eyebrow">Interactive 3 · the race · 📚 time, not distance</div>
+  <h2>Same maze, three driving styles 🏁</h2>
+  <p>All three mice drive the <b>same cells</b> with the same physics, so the distance on the grid is identical. Only the motion plan differs, and the time changes by more than 3×. The zigzag section is where diagonals pay off: the mouse cuts straight through the wall posts instead of turning left, right, left, right.</p>
+  <div class="controls">
+    <div class="ctl"><label for="ra">Grip <span id="rav"></span></label><input id="ra" type="range" min="0.5" max="5" step="0.1" value="1.5"></div>
+    <div class="ctl"><label for="rv">Top speed <span id="rvv"></span></label><input id="rv" type="range" min="1" max="7" step="0.25" value="4"></div>
+    <div class="ctl" style="min-width:140px;flex:0"><label for="rs">Playback</label><select id="rs"><option value="1">Real time</option><option value="0.5">½ speed</option><option value="0.25" selected>¼ speed</option></select></div>
+    <button id="go">▶ Race</button>
+  </div>
+  <div class="race">
+    <div class="panel"><canvas id="maze" aria-label="Maze with three racing paths"></canvas></div>
+    <div style="display:flex;flex-direction:column;gap:16px;min-width:0">
+      <div class="racers" id="racers"></div>
+      <div class="panel"><h3>📈 Speed over time</h3><canvas id="rV"></canvas></div>
+    </div>
+  </div>
+  <div class="panel">
+    <h3>🧾 What the mouse actually executes</h3>
+    <div class="eyebrow">Raw cell commands</div>
+    <div class="chips" id="rawChips"></div>
+    <div class="eyebrow" style="margin-top:6px">Compiled into library moves (diagonal mouse)</div>
+    <div class="chips" id="compChips"></div>
+  </div>
+</section>
+
+<section class="bench">
+  <div class="eyebrow">The math behind it</div>
+  <h2>Three ideas carry the whole talk</h2>
+  <div class="math">
+    <div class="eq"><h3>1 · Corner speed</h3><div class="f">v_max = √(a_lat · r)</div><p class="muted">Lateral acceleration is v²/r. Double the radius and you get about 41% more speed through the turn.</p></div>
+    <div class="eq"><h3>2 · Friction circle</h3><div class="f">√(a_x² + a_y²) ≤ μ·(g + F_fan/m)</div><p class="muted">Grip is shared: braking while turning leaves less for the turn. A fan adds downforce, which raises the whole circle.</p></div>
+    <div class="eq"><h3>3 · Time-optimal profile</h3><div class="f">forward pass + backward pass</div><p class="muted">Along a fixed path, max acceleration forward, max braking backward, take the lower curve. That is the speed plan.</p></div>
+  </div>
+  <pre>// the speed planner used by every mouse on this page
+vlim[i] = min(v_top, sqrt(a_max / |curvature[i]|))      // corner limits
+v[0] = 0
+for i in 0..n-1:   v[i+1] = min(vlim[i+1], sqrt(v[i]² + 2·a_free(v[i])·ds))   // accelerate
+for i in n-1..0:   v[i]   = min(v[i],      sqrt(v[i+1]² + 2·a_free(v[i+1])·ds)) // brake in time
+// a_free(v) = sqrt(a_max² − (v²·curvature)²)   ← what's left of the friction circle</pre>
+  <p><b>Link to our course:</b> this is the path-velocity decomposition from Lectures 1 and 3, and time-optimal motion along a specified path, the same problem solved for robot arms by Bobrow, Dubowsky &amp; Gibson and by Shin &amp; McKay (1985). A micromouse is the clean 2D version: the path is fixed by the maze, and only the speed along it is free.</p>
+  <p class="note">Simplified model: point mass, one grip number, perfect tracking. Real mice also fight motor torque curves, wheel slip, sensor noise and wall corrections, which is why top teams tune each library turn by hand on a real maze.</p>
+</section>
+
+<footer>Inspired by Veritasium, <a href="https://www.youtube.com/watch?v=ZMQbHMgK2rw" target="_blank" rel="noopener">"The Fastest Maze-Solving Competition On Earth"</a>. Physics on this page is computed live in your browser.</footer>
+</div>
+
+<script>
+const CELL=180, G=9810;
+const C={ink:"#18213D",muted:"#5A6688",line:"#DCE3F2",wall:"#E5383B",lime:"#9BC53D",blue:"#3D7FE0",orange:"#F28C28",magenta:"#C83FD1",green:"#20A86B",sun:"#FFD23F",bg:"#F3F7FF",post:"#B8202A"};
+const MONO="11px 'JetBrains Mono', ui-monospace, monospace";
+
+/* ---------- geometry ---------- */
+const ctr=([i,j])=>[i*CELL+CELL/2,j*CELL+CELL/2];
+const mid=(a,b)=>{const p=ctr(a),q=ctr(b);return[(p[0]+q[0])/2,(p[1]+q[1])/2]};
+function dedupe(p){const o=[p[0]];for(let i=1;i<p.length-1;i++){const a=o[o.length-1],b=p[i],c=p[i+1];const cr=(b[0]-a[0])*(c[1]-b[1])-(b[1]-a[1])*(c[0]-b[0]);if(Math.abs(cr)>1e-6)o.push(b)}o.push(p[p.length-1]);return o}
+function turnPoly(cells){const p=[ctr(cells[0])];for(let i=1;i<cells.length-1;i++){const d1=[cells[i][0]-cells[i-1][0],cells[i][1]-cells[i-1][1]],d2=[cells[i+1][0]-cells[i][0],cells[i+1][1]-cells[i][1]];if(d1[0]!==d2[0]||d1[1]!==d2[1])p.push(ctr(cells[i]))}p.push(ctr(cells[cells.length-1]));return p}
+function midPoly(cells){const p=[ctr(cells[0])];for(let i=0;i<cells.length-1;i++)p.push(mid(cells[i],cells[i+1]));p.push(ctr(cells[cells.length-1]));return dedupe(p)}
+
+// fillet a polyline; rFor(absAngle, avail) -> radius (0 = stop and spin)
+function buildPath(pts,rFor,ds=3){
+  const n=pts.length,legs=[],dirs=[];
+  for(let i=0;i<n-1;i++){const dx=pts[i+1][0]-pts[i][0],dy=pts[i+1][1]-pts[i][1],L=Math.hypot(dx,dy);legs.push(L);dirs.push([dx/L,dy/L])}
+  const th=Array(n).fill(0),t=Array(n).fill(0),r=Array(n).fill(0);
+  for(let i=1;i<n-1;i++){const a=dirs[i-1],b=dirs[i];const ang=Math.atan2(a[0]*b[1]-a[1]*b[0],a[0]*b[0]+a[1]*b[1]);th[i]=ang;
+    const ap=(i-1===0)?legs[i-1]:legs[i-1]/2, an=(i+1===n-1)?legs[i]:legs[i]/2;
+    const rr=rFor(Math.abs(ang),Math.min(ap,an));r[i]=rr;t[i]=rr*Math.tan(Math.abs(ang)/2)}
+  const S={x:[],y:[],k:[],h:[],spin:{},corners:[],pts,legs,dirs,th,r};
+  const push=(x,y,k,h)=>{S.x.push(x);S.y.push(y);S.k.push(k);S.h.push(h)};
+  for(let i=0;i<n-1;i++){
+    const d=dirs[i],h=Math.atan2(d[1],d[0]);
+    const st=[pts[i][0]+d[0]*t[i],pts[i][1]+d[1]*t[i]],en=[pts[i+1][0]-d[0]*t[i+1],pts[i+1][1]-d[1]*t[i+1]];
+    const L=Math.max(0,legs[i]-t[i]-t[i+1]),m=Math.max(1,Math.ceil(L/ds));
+    for(let q=S.x.length?1:0;q<=m;q++)push(st[0]+(en[0]-st[0])*q/m,st[1]+(en[1]-st[1])*q/m,0,h);
+    if(i+1<=n-2){const a=th[i+1],rr=r[i+1];
+      if(rr===0){S.spin[S.x.length-1]=a}
+      else{const sg=Math.sign(a),nr=[-d[1],d[0]],c=[en[0]+sg*rr*nr[0],en[1]+sg*rr*nr[1]],p0=Math.atan2(en[1]-c[1],en[0]-c[0]),A=Math.abs(a),mm=Math.max(2,Math.ceil(rr*A/ds));
+        S.corners.push({ang:a,r:rr});
+        for(let q=1;q<=mm;q++){const ph=p0+sg*A*q/mm;push(c[0]+rr*Math.cos(ph),c[1]+rr*Math.sin(ph),sg/rr,h+sg*A*q/mm)}}}
+  }
+  return finish(S);
+}
+function finish(S){S.s=[0];for(let i=1;i<S.x.length;i++)S.s.push(S.s[i-1]+Math.hypot(S.x[i]-S.x[i-1],S.y[i]-S.y[i-1]));return S}
+
+// path from a curvature profile: segs [{L,k0,k1}] or {spin}
+function profilePath(segs,start=[0,0],h0=Math.PI/2,ds=2){
+  const S={x:[start[0]],y:[start[1]],k:[0],h:[h0],spin:{}};let x=start[0],y=start[1],h=h0;
+  for(const g of segs){
+    if(g.spin!==undefined){S.spin[S.x.length-1]=g.spin;h+=g.spin;S.h[S.h.length-1]=S.h[S.h.length-1];continue}
+    const m=Math.max(1,Math.ceil(g.L/ds)),d=g.L/m,k1=g.k1??g.k0;
+    for(let q=1;q<=m;q++){const km=g.k0+(k1-g.k0)*(q-.5)/m,hn=h+km*d;x+=Math.cos((h+hn)/2)*d;y+=Math.sin((h+hn)/2)*d;h=hn;S.x.push(x);S.y.push(y);S.k.push(g.k0+(k1-g.k0)*q/m);S.h.push(h)}
+  }
+  return finish(S);
+}
+
+/* ---------- time-optimal speed profile ---------- */
+function topp(S,Ag,Vms){
+  const A=Ag*G,V=Vms*1000,n=S.x.length,vl=new Float64Array(n),v=new Float64Array(n);
+  for(let i=0;i<n;i++){const k=Math.abs(S.k[i]);vl[i]=k>1e-9?Math.min(V,Math.sqrt(A/k)):V;if(S.spin[i]!==undefined)vl[i]=0}
+  vl[0]=0;
+  const free=(vv,k)=>{const al=vv*vv*Math.abs(k);return Math.sqrt(Math.max(0,A*A-al*al))};
+  v[0]=0;
+  for(let i=0;i<n-1;i++){const ds=S.s[i+1]-S.s[i];v[i+1]=Math.min(vl[i+1],Math.sqrt(v[i]*v[i]+2*Math.max(free(v[i],S.k[i]),A*0.02)*ds))}
+  for(let i=n-2;i>=0;i--){const ds=S.s[i+1]-S.s[i];v[i]=Math.min(v[i],Math.sqrt(v[i+1]*v[i+1]+2*Math.max(free(v[i+1],S.k[i+1]),A*0.02)*ds))}
+  const vf=Float64Array.from(v),vb=new Float64Array(n);
+  {const f2=new Float64Array(n);f2[0]=0;for(let i=0;i<n-1;i++){const ds=S.s[i+1]-S.s[i];f2[i+1]=Math.min(vl[i+1],Math.sqrt(f2[i]*f2[i]+2*Math.max(free(f2[i],S.k[i]),A*0.02)*ds))}vf.set(f2)}
+  vb[n-1]=vl[n-1];for(let i=n-2;i>=0;i--){const ds=S.s[i+1]-S.s[i];vb[i]=Math.min(vl[i],Math.sqrt(vb[i+1]*vb[i+1]+2*Math.max(free(vb[i+1],S.k[i+1]),A*0.02)*ds))}
+  const alpha=A/35; // in-place spin: wheel accel / half track (70 mm track)
+  const tA=new Float64Array(n),tD=new Float64Array(n);let stops=0,peakLat=0,peakV=0;
+  for(let i=0;i<n;i++){
+    if(i>0){const ds=S.s[i]-S.s[i-1],vs=v[i]+v[i-1];tA[i]=tD[i-1]+(vs>1e-9?2*ds/vs:0)}
+    tD[i]=tA[i];if(S.spin[i]!==undefined){tD[i]+=2*Math.sqrt(Math.abs(S.spin[i])/alpha);stops++}
+    peakLat=Math.max(peakLat,v[i]*v[i]*Math.abs(S.k[i])/G);peakV=Math.max(peakV,v[i]/1000)}
+  return{v,vl,vf,vb,tA,tD,T:tD[n-1],stops,peakLat,peakV,S}
+}
+function poseAt(P,T){const {tA,tD,S}=P,n=S.x.length;if(T>=tD[n-1])return{x:S.x[n-1],y:S.y[n-1],h:S.h[n-1],done:true};
+  let lo=0,hi=n-1;while(hi-lo>1){const m=(lo+hi)>>1;if(tA[m]<=T)lo=m;else hi=m}
+  const i=lo;
+  if(T<tD[i]){const sp=S.spin[i]||0,f=(T-tA[i])/(tD[i]-tA[i]);return{x:S.x[i],y:S.y[i],h:S.h[i]+sp*f}}
+  const f=(T-tD[i])/Math.max(1e-9,tA[i+1]-tD[i]);let hn=S.h[i+1];if(S.spin[i])hn=S.h[i+1];
+  return{x:S.x[i]+(S.x[i+1]-S.x[i])*f,y:S.y[i]+(S.y[i+1]-S.y[i])*f,h:S.h[i]+(hn-S.h[i])*f}}
+
+/* ---------- canvas helpers ---------- */
+function fit(cv,aspect){const w=cv.clientWidth||300,h=Math.round(w*aspect),d=window.devicePixelRatio||1;cv.width=Math.round(w*d);cv.height=Math.round(h*d);cv.style.height=h+"px";const x=cv.getContext("2d");x.setTransform(d,0,0,d,0,0);x.clearRect(0,0,w,h);return{x,w,h}}
+function niceStep(m){const r=m/5,p=Math.pow(10,Math.floor(Math.log10(r))),f=r/p;return(f<1.5?1:f<3?2:f<7?5:10)*p}
+function chart(cv,{series,xmax,ymax,xlab,ylab,marker,aspect=.55,dots}){
+  const {x,w,h}=fit(cv,aspect),L=46,R=12,T=10,B=34,pw=w-L-R,ph=h-T-B;
+  const sx=v=>L+v/xmax*pw,sy=v=>T+ph-v/ymax*ph;
+  x.font=MONO;x.strokeStyle=C.line;x.fillStyle=C.muted;x.lineWidth=1;
+  const xs=niceStep(xmax),ys=niceStep(ymax);
+  for(let v=0;v<=xmax+1e-9;v+=xs){x.beginPath();x.moveTo(sx(v),T);x.lineTo(sx(v),T+ph);x.stroke();x.textAlign="center";x.fillText(+v.toFixed(3),sx(v),T+ph+14)}
+  for(let v=0;v<=ymax+1e-9;v+=ys){x.beginPath();x.moveTo(L,sy(v));x.lineTo(L+pw,sy(v));x.stroke();x.textAlign="right";x.fillText(+v.toFixed(2),L-6,sy(v)+4)}
+  x.textAlign="center";x.fillText(xlab,L+pw/2,h-4);x.save();x.translate(11,T+ph/2);x.rotate(-Math.PI/2);x.fillText(ylab,0,0);x.restore();
+  x.save();x.beginPath();x.rect(L,T-2,pw,ph+4);x.clip();
+  for(const s of series){x.strokeStyle=s.color;x.lineWidth=s.width||2.5;x.setLineDash(s.dash||[]);x.lineJoin="round";x.beginPath();
+    for(let i=0;i<s.xs.length;i++){const a=sx(s.xs[i]),b=sy(s.ys[i]);i?x.lineTo(a,b):x.moveTo(a,b)}x.stroke();
+    if(s.fill){x.lineTo(sx(s.xs[s.xs.length-1]),sy(0));x.lineTo(sx(s.xs[0]),sy(0));x.closePath();x.globalAlpha=.12;x.fillStyle=s.color;x.fill();x.globalAlpha=1}}
+  x.setLineDash([]);
+  if(marker!==undefined){x.strokeStyle=C.ink;x.lineWidth=1.5;x.beginPath();x.moveTo(sx(marker),T);x.lineTo(sx(marker),T+ph);x.stroke()}
+  if(dots)for(const d of dots){x.fillStyle=d.color;x.beginPath();x.arc(sx(d.x),sy(d.y),6,0,7);x.fill();x.strokeStyle="#fff";x.lineWidth=2;x.stroke()}
+  x.restore();
+}
+function series(P,which){const xs=[],ys=[],n=P.S.x.length,st=Math.max(1,Math.floor(n/600));
+  for(let i=0;i<n;i+=st){const t=P.tA[i];xs.push(t);ys.push(which(i));if(P.tD[i]>P.tA[i]){xs.push(P.tD[i]);ys.push(which(i))}}
+  xs.push(P.tD[n-1]);ys.push(which(n-1));return{xs,ys}}
+
+// draw a cell maze: cells on path get walls on unopened sides
+function drawMaze(x,cells,W,H,sc,ox,oy,extra){
+  const key=(i,j)=>i+","+j,on=new Set(cells.map(c=>key(c[0],c[1]))),open=new Set();
+  for(let i=0;i<cells.length-1;i++){const a=cells[i],b=cells[i+1];open.add(key(a[0],a[1])+"|"+key(b[0],b[1]));open.add(key(b[0],b[1])+"|"+key(a[0],a[1]))}
+  const X=v=>ox+v*sc,Y=v=>oy+(H*CELL-v)*sc;
+  x.fillStyle="#FCFDFF";x.fillRect(X(0),Y(H*CELL),W*CELL*sc,H*CELL*sc);
+  x.strokeStyle=C.wall;x.lineCap="round";x.lineWidth=Math.max(2.5,12*sc);
+  const seg=(a,b,c,d)=>{x.beginPath();x.moveTo(X(a),Y(b));x.lineTo(X(c),Y(d));x.stroke()};
+  const walls=new Set();
+  const addW=(i,j,side)=>{let k;if(side==="N")k=`h${i},${j+1}`;if(side==="S")k=`h${i},${j}`;if(side==="E")k=`v${i+1},${j}`;if(side==="W")k=`v${i},${j}`;walls.add(k)};
+  for(const c of cells){const [i,j]=c;for(const [s,di,dj] of [["N",0,1],["S",0,-1],["E",1,0],["W",-1,0]]){if(!open.has(key(i,j)+"|"+key(i+di,j+dj)))addW(i,j,s)}}
+  if(extra)for(const k of extra)walls.add(k);
+  for(let i=0;i<W;i++){walls.add(`h${i},0`);walls.add(`h${i},${H}`)}for(let j=0;j<H;j++){walls.add(`v0,${j}`);walls.add(`v${W},${j}`)}
+  for(const w of walls){const [a,b]=w.slice(1).split(",").map(Number);if(w[0]==="h")seg(a*CELL,b*CELL,(a+1)*CELL,b*CELL);else seg(a*CELL,b*CELL,a*CELL,(b+1)*CELL)}
+  x.fillStyle=C.post;for(let i=0;i<=W;i++)for(let j=0;j<=H;j++){x.fillRect(X(i*CELL)-Math.max(2,7*sc),Y(j*CELL)-Math.max(2,7*sc),2*Math.max(2,7*sc),2*Math.max(2,7*sc))}
+  return{X,Y};
+}
+function strokePath(x,S,X,Y,color,w,dash){x.strokeStyle=color;x.lineWidth=w;x.setLineDash(dash||[]);x.lineJoin="round";x.lineCap="round";x.beginPath();for(let i=0;i<S.x.length;i++){i?x.lineTo(X(S.x[i]),Y(S.y[i])):x.moveTo(X(S.x[i]),Y(S.y[i]))}x.stroke();x.setLineDash([])}
+
+/* ---------- strategies ---------- */
+const radCap=420;
+const spinR=()=>0, smoothR=(a,av)=>Math.min(90,av/Math.tan(a/2)), bigR=(a,av)=>Math.min(radCap,av/Math.tan(a/2));
+const turnColor=a=>{const d=Math.round(Math.abs(a)*180/Math.PI);return d<=50?C.blue:d<=100?C.orange:C.magenta};
+
+/* ---------- hero: overlay of library moves from one entry ---------- */
+function hero(){
+  const cv=document.getElementById("heroCv"),{x,w,h}=fit(cv,1.05);
+  const W=4,H=4,sc=Math.min(w,h)/(Math.max(W,H)*CELL)*0.9,ox=(w-W*CELL*sc)/2,oy=(h-H*CELL*sc)/2;
+  const {X,Y}=drawMaze(x,[[1,0],[1,1]],W,H,sc,ox,oy);
+  const moves=[[[1,0],[1,1],[2,1],[3,1]],[[1,0],[1,1],[1,2],[2,2],[3,2]],[[1,0],[1,1],[2,1],[2,2],[3,2],[3,3]],[[1,0],[1,1],[1,2],[2,2],[2,1],[2,0]],[[1,0],[1,1],[1,2],[1,3]],[[1,0],[1,1],[0,1],[0,2],[0,3]]];
+  const cols=[C.orange,C.blue,C.green,C.magenta,C.lime,C.sun];
+  moves.forEach((m,i)=>{const S=buildPath(midPoly(m),bigR);strokePath(x,S,X,Y,cols[i],Math.max(4,16*sc))});
+  x.font="bold 15px 'Bricolage Grotesque', sans-serif";x.fillStyle=C.ink;x.textAlign="left";x.fillText("🐭 one entry, six library moves",ox+6,oy-6>14?oy-6:16);
+}
+
+/* ---------- turn library cards ---------- */
+const LIB=[
+  {name:"Search 90°",w:3,h:2,cells:[[1,0],[1,1],[2,1]],mode:"smooth",note:"Used while exploring. Fits inside one cell."},
+  {name:"Large 90°",w:3,h:2,cells:[[1,0],[1,1],[2,1]],mode:"big",note:"Starts turning early, cuts the inner corner."},
+  {name:"Long 180°",w:2,h:2,cells:[[0,0],[0,1],[1,1],[1,0]],mode:"big",note:"One sweeping U instead of two 90s."},
+  {name:"45° in · diagonal · 45° out",w:3,h:4,cells:[[0,0],[0,1],[1,1],[1,2],[2,2],[2,3]],mode:"big",note:"Zigzag cells become one straight line."},
+  {name:"Diagonal V90",w:4,h:2,cells:[[0,0],[1,0],[1,1],[2,1],[2,0],[3,0]],mode:"big",note:"Diagonal to diagonal, turning between posts."}
+];
+function drawLib(){
+  const host=document.getElementById("lib");
+  if(!host.children.length)LIB.forEach((L,i)=>{host.insertAdjacentHTML("beforeend",`<div class="card"><h3>${L.name}</h3><canvas id="lib${i}"></canvas><div class="meta" id="libm${i}"></div><p class="muted" style="font-size:.85rem">${L.note}</p></div>`)});
+  LIB.forEach((L,i)=>{
+    const cv=document.getElementById("lib"+i),{x,w,h}=fit(cv,.8),sc=Math.min(w/(L.w*CELL),h/(L.h*CELL))*.9,ox=(w-L.w*CELL*sc)/2,oy=(h-L.h*CELL*sc)/2;
+    const {X,Y}=drawMaze(x,L.cells,L.w,L.h,sc,ox,oy);
+    strokePath(x,buildPath(turnPoly(L.cells),spinR),X,Y,"#9AA6C4",2,[5,5]);
+    const S=L.mode==="smooth"?buildPath(turnPoly(L.cells),smoothR):buildPath(midPoly(L.cells),bigR);
+    strokePath(x,S,X,Y,C.lime,Math.max(4,14*sc));
+    let start=0;S.corners.length&&S.corners.forEach(()=>{});
+    // colour arcs by angle
+    let i0=0;for(let k=1;k<S.x.length;k++){if(S.k[k]!==0){x.strokeStyle=turnColor(S.corners[0]?S.corners[0].ang:0)}}
+    const rmin=Math.min(...S.corners.map(c=>c.r));
+    const ang=S.corners.map(c=>Math.round(Math.abs(c.ang)*180/Math.PI)+"°").join(" + ");
+    document.getElementById("libm"+i).textContent=`arcs ${ang} · tightest r ${Math.round(rmin)} mm · v ≤ ${Math.sqrt(1.5*G*rmin/1e6).toFixed(2)} m/s @1.5 g`;
+  });
+}
+
+/* ---------- corner lab ---------- */
+const $=id=>document.getElementById(id);
+function cornerPath(r,clo){
+  if(r===0)return profilePath([{L:540,k0:0},{spin:-Math.PI/2},{L:540,k0:0}]);
+  let turn;
+  if(!clo)turn=[{L:Math.PI*r/2,k0:-1/r}];
+  else{const Lc=Math.PI*r/4;turn=[{L:Lc,k0:0,k1:-1/r},{L:Math.PI*r/4,k0:-1/r},{L:Lc,k0:-1/r,k1:0}]}
+  const T=profilePath(turn,[0,0],Math.PI/2),set=T.y[T.y.length-1];
+  const lead=Math.max(0,540-set);
+  return profilePath([{L:lead,k0:0},...turn,{L:Math.max(0,540-(T.x[T.x.length-1])),k0:0}]);
+}
+function corner(){
+  const r=+$("cr").value,A=+$("ca").value,V=+$("cv").value,clo=$("cc").checked&&r>0;
+  $("crv").textContent=r===0?"0 · stop & spin":r+" mm";$("cav").textContent=A.toFixed(1)+" g";$("cvv").textContent=V.toFixed(2)+" m/s";
+  const S=cornerPath(r,clo),P=topp(S,A,V);
+  let vmin=1e9;for(let i=0;i<S.x.length;i++)if(Math.abs(S.k[i])>0||S.spin[i]!==undefined)vmin=Math.min(vmin,P.v[i]);if(vmin===1e9)vmin=0;
+  let jerk=0;for(let i=1;i<S.x.length;i++){const a1=P.v[i]**2*Math.abs(S.k[i])/G,a0=P.v[i-1]**2*Math.abs(S.k[i-1])/G,dt=P.tA[i]-P.tD[i-1];if(dt>1e-6)jerk=Math.max(jerk,Math.abs(a1-a0)/dt)}
+  $("cstats").innerHTML=[["⏱️ Time for 1.08 m",P.T.toFixed(3)+" s"],["🏎️ Corner speed",(vmin/1000).toFixed(2)+" m/s"],["↪️ Peak sideways",P.peakLat.toFixed(2)+" g"],["⚡ Peak sideways jerk",(r===0?"n/a":(jerk>500?"≈ ∞ (step)":Math.round(jerk)+" g/s"))]].map(([k,v])=>`<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`).join("");
+  // geometry
+  {const cv=$("cGeo"),{x,w,h}=fit(cv,.8),W=4,H=4,sc=Math.min(w,h)/(W*CELL)*.92,ox=(w-W*CELL*sc)/2,oy=(h-H*CELL*sc)/2;
+   const cells=[[0,0],[0,1],[0,2],[0,3],[1,3],[2,3],[3,3]];
+   const {X,Y}=drawMaze(x,cells,W,H,sc,ox,oy,[]);
+   const off=[90,-450];const SS={x:S.x.map(v=>v+off[0]),y:S.y.map(v=>v+90+0),k:S.k};
+   // start at centre of (0,0) going up; corner at centre of (0,3)
+   SS.y=S.y.map(v=>v+90);
+   strokePath(x,SS,X,Y,clo?C.magenta:(r===0?C.orange:C.blue),Math.max(4,14*sc));
+   if(r>0){x.fillStyle=C.ink;x.font="bold 13px 'Atkinson Hyperlegible', sans-serif";x.textAlign="left";x.fillText(`r = ${r} mm`,X(90+30),Y(630-r/2))}
+   else{x.font="22px sans-serif";x.textAlign="center";x.fillText("🛑",X(90),Y(630)+8)}
+  }
+  // sweep
+  {const rs=[],ta=[],tc=[];for(let rr=0;rr<=300;rr+=10){rs.push(rr);ta.push(topp(cornerPath(rr,false),A,V).T);tc.push(rr?topp(cornerPath(rr,true),A,V).T:ta[0])}
+   const ym=Math.max(...ta,...tc)*1.08;
+   chart($("cSweep"),{series:[{xs:rs,ys:ta,color:C.blue},{xs:rs,ys:tc,color:C.magenta,dash:[6,5]}],xmax:300,ymax:ym,xlab:"radius (mm) · solid arc, dashed clothoid",ylab:"time (s)",dots:[{x:r,y:P.T,color:clo?C.magenta:C.blue}]})}
+  const vs=series(P,i=>P.v[i]/1000),ls=series(P,i=>P.v[i]**2*Math.abs(S.k[i])/G);
+  chart($("cV"),{series:[{xs:vs.xs,ys:vs.ys,color:C.green,fill:true}],xmax:P.T*1.02,ymax:V*1.1,xlab:"time (s)",ylab:"speed (m/s)"});
+  {const st=Math.max(1,Math.floor(S.x.length/500)),xs=[],lim=[],f=[],b=[],o=[];for(let i=0;i<S.x.length;i+=st){xs.push(S.s[i]/1000);lim.push(Math.min(P.vl[i],V*1300)/1000);f.push(P.vf[i]/1000);b.push(Math.min(P.vb[i],V*1300)/1000);o.push(P.v[i]/1000)}
+   chart($("cPhase"),{series:[{xs,ys:lim,color:"#9AA6C4",dash:[6,5],width:2},{xs,ys:f,color:C.orange,width:2},{xs,ys:b,color:C.magenta,width:2},{xs,ys:o,color:C.green,width:4}],xmax:S.s[S.s.length-1]/1000,ymax:V*1.25,xlab:"distance along path s (m)",ylab:"speed ṡ (m/s)",aspect:.38})}
+  chart($("cLat"),{series:[{xs:ls.xs,ys:ls.ys,color:C.orange,fill:true}],xmax:P.T*1.02,ymax:Math.max(A*1.15,.2),xlab:"time (s)",ylab:"sideways accel (g)"});
+}
+["cr","ca","cv","cc"].forEach(id=>$(id).addEventListener("input",corner));
+
+/* ---------- race ---------- */
+const PATH=[[0,0],[0,1],[0,2],[1,2],[2,2],[2,1],[3,1],[3,0],[4,0],[5,0],[5,1],[5,2],[4,2],[4,3],[3,3],[3,4],[3,5]];
+const EXTRA=["v1,0","v2,0","h1,1","h4,4","v5,3","v5,4","h5,4","v4,5","h0,4","v1,4","h1,5","v2,3","h2,4","v5,5","h4,1"];
+const STRATS=[{key:"spin",name:"🛑 Stop & spin",desc:"brake to zero, rotate, go",color:C.orange,build:()=>buildPath(turnPoly(PATH),spinR)},
+              {key:"smooth",name:"🔵 Smooth 90s",desc:"search turns, r = 90 mm",color:C.blue,build:()=>buildPath(turnPoly(PATH),smoothR)},
+              {key:"diag",name:"🚀 Large turns + diagonals",desc:"turn library, cuts corners",color:C.green,build:()=>buildPath(midPoly(PATH),bigR)}];
+STRATS.forEach(s=>s.S=s.build());
+let RP=[],animT=0,playing=false,t0=0;
+function compute(){const A=+$("ra").value,V=+$("rv").value;$("rav").textContent=A.toFixed(1)+" g";$("rvv").textContent=V.toFixed(2)+" m/s";RP=STRATS.map(s=>topp(s.S,A,V));
+  const best=Math.min(...RP.map(p=>p.T));
+  $("racers").innerHTML=STRATS.map((s,i)=>{const p=RP[i];return`<div class="racer ${p.T===best?"win":""}"><div class="sw" style="background:${s.color}"></div><div><b>${s.name}</b><div class="d">${s.desc} · top ${p.peakV.toFixed(2)} m/s · ${p.stops} stops</div></div><div class="t">${p.T.toFixed(3)} s${p.T===best?" 🏆":""}</div></div>`}).join("");
+}
+function drawRace(){
+  const cv=$("maze"),{x,w,h}=fit(cv,1),W=6,H=6,sc=Math.min(w,h)/(W*CELL)*.94,ox=(w-W*CELL*sc)/2,oy=(h-H*CELL*sc)/2;
+  const {X,Y}=drawMaze(x,PATH,W,H,sc,ox,oy,EXTRA);
+  x.font="20px sans-serif";x.textAlign="center";x.fillText("🧀",X(3*CELL+90),Y(5*CELL+90)+7);
+  STRATS.forEach((s,i)=>{x.globalAlpha=.45;strokePath(x,s.S,X,Y,s.color,Math.max(3,10*sc));x.globalAlpha=1});
+  STRATS.forEach((s,i)=>{const p=poseAt(RP[i],animT),cx=X(p.x),cy=Y(p.y),R=Math.max(7,32*sc);
+    x.save();x.translate(cx,cy);x.rotate(-p.h);x.fillStyle=s.color;x.strokeStyle="#fff";x.lineWidth=2.5;
+    x.beginPath();x.roundRect?x.roundRect(-R,-R*.8,R*2,R*1.6,R*.4):x.rect(-R,-R*.8,R*2,R*1.6);x.fill();x.stroke();
+    x.fillStyle="#fff";x.beginPath();x.moveTo(R*1.15,0);x.lineTo(R*.35,-R*.45);x.lineTo(R*.35,R*.45);x.closePath();x.fill();x.restore()});
+  const mx=Math.max(...RP.map(p=>p.T))*1.02,V=+$("rv").value;
+  chart($("rV"),{series:RP.map((p,i)=>{const s=series(p,k=>p.v[k]/1000);return{xs:s.xs,ys:s.ys,color:STRATS[i].color}}),xmax:mx,ymax:V*1.1,xlab:"time (s)",ylab:"speed (m/s)",marker:animT>0?animT:undefined,aspect:.6});
+}
+function chips(){
+  // raw
+  const d=[];for(let i=0;i<PATH.length-1;i++)d.push([PATH[i+1][0]-PATH[i][0],PATH[i+1][1]-PATH[i][1]]);
+  const raw=["F"];for(let i=1;i<d.length;i++){if(d[i][0]!==d[i-1][0]||d[i][1]!==d[i-1][1])raw.push(d[i-1][0]*d[i][1]-d[i-1][1]*d[i][0]>0?"L":"R");raw.push("F")}
+  $("rawChips").innerHTML=raw.map(t=>`<span class="chip raw">${t}</span>`).join("");
+  // compiled
+  const S=STRATS[2].S,out=[];
+  for(let i=0;i<S.legs.length;i++){const dd=S.dirs[i],axis=Math.abs(dd[0])<1e-6||Math.abs(dd[1])<1e-6;
+    out.push(axis?`<span class="chip" style="background:${C.lime}">straight ${(S.legs[i]/CELL).toFixed(1)}</span>`:`<span class="chip" style="background:${C.wall}">diagonal ×${Math.round(S.legs[i]/(CELL/Math.SQRT2))}</span>`);
+    if(i+1<S.pts.length-1){const a=S.th[i+1];out.push(`<span class="chip" style="background:${turnColor(a)}">${a>0?"L":"R"}${Math.round(Math.abs(a)*180/Math.PI)} · r${Math.round(S.r[i+1])}</span>`)}}
+  $("compChips").innerHTML=out.join("");
+}
+function loop(now){if(!playing)return;animT=(now-t0)/1000*(+$("rs").value);const mx=Math.max(...RP.map(p=>p.T));if(animT>mx){animT=mx;playing=false;$("go").textContent="↻ Race again"}drawRace();if(playing)requestAnimationFrame(loop)}
+$("go").addEventListener("click",()=>{animT=0;t0=performance.now();playing=true;$("go").textContent="Racing…";requestAnimationFrame(loop)});
+["ra","rv"].forEach(id=>$(id).addEventListener("input",()=>{compute();if(!playing){animT=0;drawRace()}}));
+
+/* ---------- flood fill ---------- */
+function wallSet(cells,W,H,extra){const key=(i,j)=>i+","+j,open=new Set(),walls=new Set();
+  for(let i=0;i<cells.length-1;i++){const a=cells[i],b=cells[i+1];open.add(key(a[0],a[1])+"|"+key(b[0],b[1]));open.add(key(b[0],b[1])+"|"+key(a[0],a[1]))}
+  for(const [i,j] of cells){if(!open.has(key(i,j)+"|"+key(i,j+1)))walls.add(`h${i},${j+1}`);if(!open.has(key(i,j)+"|"+key(i,j-1)))walls.add(`h${i},${j}`);if(!open.has(key(i,j)+"|"+key(i+1,j)))walls.add(`v${i+1},${j}`);if(!open.has(key(i,j)+"|"+key(i-1,j)))walls.add(`v${i},${j}`)}
+  for(const e of extra)walls.add(e);for(let i=0;i<W;i++){walls.add(`h${i},0`);walls.add(`h${i},${H}`)}for(let j=0;j<H;j++){walls.add(`v0,${j}`);walls.add(`v${W},${j}`)}return walls}
+const FW=6,FH=6,FGOAL=[3,5],FSTART=[0,0];
+const FW0=wallSet(PATH,FW,FH,EXTRA);let FWALL=new Set(FW0),fWave=-1,fTimer=null,fGeom=null;
+const fBlocked=(i,j,di,dj)=>di===1?FWALL.has(`v${i+1},${j}`):di===-1?FWALL.has(`v${i},${j}`):dj===1?FWALL.has(`h${i},${j+1}`):FWALL.has(`h${i},${j}`);
+const DIRS=[[0,1],[1,0],[0,-1],[-1,0]];
+function flood(){const D=Array.from({length:FW},()=>Array(FH).fill(Infinity));D[FGOAL[0]][FGOAL[1]]=0;const q=[FGOAL];let max=0;
+  while(q.length){const [i,j]=q.shift();for(const [di,dj] of DIRS){const a=i+di,b=j+dj;if(a<0||b<0||a>=FW||b>=FH||fBlocked(i,j,di,dj))continue;if(D[a][b]>D[i][j]+1){D[a][b]=D[i][j]+1;max=Math.max(max,D[a][b]);q.push([a,b])}}}return{D,max}}
+function descend(D){const p=[FSTART];if(!isFinite(D[FSTART[0]][FSTART[1]]))return null;let c=FSTART,pd=null;
+  while(D[c[0]][c[1]]>0){let best=null;for(const [di,dj] of DIRS){const a=c[0]+di,b=c[1]+dj;if(a<0||b<0||a>=FW||b>=FH||fBlocked(c[0],c[1],di,dj))continue;if(D[a][b]===D[c[0]][c[1]]-1){const straight=pd&&pd[0]===di&&pd[1]===dj;if(!best||straight)best=[a,b,di,dj]}}
+    c=[best[0],best[1]];pd=[best[2],best[3]];p.push(c)}return p}
+function drawFlood(){const cv=$("fCv"),{x,w,h}=fit(cv,1),sc=Math.min(w,h)/(FW*CELL)*.94,ox=(w-FW*CELL*sc)/2,oy=(h-FH*CELL*sc)/2;fGeom={sc,ox,oy};
+  const X=v=>ox+v*sc,Y=v=>oy+(FH*CELL-v)*sc,{D,max}=flood(),wave=fWave<0?-1:fWave;
+  x.fillStyle="#FCFDFF";x.fillRect(X(0),Y(FH*CELL),FW*CELL*sc,FH*CELL*sc);
+  for(let i=0;i<FW;i++)for(let j=0;j<FH;j++){const d=D[i][j];if(isFinite(d)&&d<=wave){x.fillStyle=`hsl(${48+d*16},90%,${82-Math.min(d,12)}%)`;x.fillRect(X(i*CELL)+1,Y((j+1)*CELL)+1,CELL*sc-2,CELL*sc-2);x.fillStyle=C.ink;x.font=`600 ${Math.max(11,46*sc)}px 'JetBrains Mono', monospace`;x.textAlign="center";x.textBaseline="middle";x.fillText(d,X(i*CELL+90),Y(j*CELL+90))}}
+  x.textBaseline="alphabetic";
+  const full=wave>=max;let path=null;
+  if(full){path=descend(D);if(path){x.strokeStyle=C.green;x.lineWidth=Math.max(4,22*sc);x.lineCap="round";x.lineJoin="round";x.globalAlpha=.8;x.beginPath();path.forEach((c,k)=>{const [a,b]=ctr(c);k?x.lineTo(X(a),Y(b)):x.moveTo(X(a),Y(b))});x.stroke();x.globalAlpha=1}}
+  x.strokeStyle=C.wall;x.lineCap="round";x.lineWidth=Math.max(2.5,12*sc);
+  for(const wl of FWALL){const [a,b]=wl.slice(1).split(",").map(Number);x.beginPath();if(wl[0]==="h"){x.moveTo(X(a*CELL),Y(b*CELL));x.lineTo(X((a+1)*CELL),Y(b*CELL))}else{x.moveTo(X(a*CELL),Y(b*CELL));x.lineTo(X(a*CELL),Y((b+1)*CELL))}x.stroke()}
+  x.fillStyle=C.post;const pr=Math.max(2,7*sc);for(let i=0;i<=FW;i++)for(let j=0;j<=FH;j++)x.fillRect(X(i*CELL)-pr,Y(j*CELL)-pr,2*pr,2*pr);
+  x.font=`${Math.max(16,60*sc)}px sans-serif`;x.textAlign="center";x.textBaseline="middle";
+  if(wave<0){x.fillText("🧀",X(FGOAL[0]*CELL+90),Y(FGOAL[1]*CELL+90))}
+  x.fillText("🐭",X(FSTART[0]*CELL+90)+(wave>=0?0:0),Y(FSTART[1]*CELL+90)+(wave>=D[0][0]?-Math.max(10,45*sc):0));x.textBaseline="alphabetic";
+  let turns=0;if(path)for(let k=2;k<path.length;k++){const a=[path[k-1][0]-path[k-2][0],path[k-1][1]-path[k-2][1]],b=[path[k][0]-path[k-1][0],path[k][1]-path[k-1][1]];if(a[0]!==b[0]||a[1]!==b[1])turns++}
+  const reached=D.flat().filter(v=>isFinite(v)).length,sd=D[FSTART[0]][FSTART[1]];
+  $("fStats").innerHTML=[["🌊 Wave",wave<0?"not started":Math.min(wave,max)],["🐭 Start cost u(S)",full&&isFinite(sd)?sd:"…"],["🔄 Turns on route",path?turns:"…"],["🧩 Cells reached",wave<0?"…":reached+" / 36"]].map(([k,v])=>`<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`).join("");
+  $("fMsg").textContent=full&&!isFinite(sd)?"🚧 No route: the start is walled off from the goal.":"";
+}
+function fAnimate(){clearInterval(fTimer);fWave=0;drawFlood();const {max}=flood();fTimer=setInterval(()=>{fWave++;drawFlood();if(fWave>=max)clearInterval(fTimer)},reduceMotion?0:260)}
+const reduceMotion=window.matchMedia&&matchMedia("(prefers-reduced-motion: reduce)").matches;
+$("fGo").addEventListener("click",fAnimate);
+$("fReset").addEventListener("click",()=>{FWALL=new Set(FW0);clearInterval(fTimer);fWave=99;drawFlood()});
+$("fCv").addEventListener("click",e=>{if(!fGeom)return;const r=e.currentTarget.getBoundingClientRect(),{sc,ox,oy}=fGeom,mx=(e.clientX-r.left-ox)/sc,my=FH*CELL-(e.clientY-r.top-oy)/sc;
+  let best=null,bd=70;for(let a=1;a<FW;a++)for(let b=0;b<FH;b++){const d=Math.hypot(mx-a*CELL,my-(b+.5)*CELL);if(d<bd){bd=d;best=`v${a},${b}`}}
+  for(let a=0;a<FW;a++)for(let b=1;b<FH;b++){const d=Math.hypot(mx-(a+.5)*CELL,my-b*CELL);if(d<bd){bd=d;best=`h${a},${b}`}}
+  if(!best)return;FWALL.has(best)?FWALL.delete(best):FWALL.add(best);clearInterval(fTimer);fWave=99;drawFlood()});
+
+function all(){drawFlood();hero();drawLib();corner();compute();drawRace();chips()}
+let rt;window.addEventListener("resize",()=>{clearTimeout(rt);rt=setTimeout(()=>{drawFlood();hero();drawLib();corner();drawRace()},120)});
+(document.fonts&&document.fonts.ready?document.fonts.ready:Promise.resolve()).then(all);
+all();
+</script>
